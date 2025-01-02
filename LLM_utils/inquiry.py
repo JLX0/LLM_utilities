@@ -5,6 +5,7 @@ import os
 from typing import Any
 from typing import Optional
 from typing import Callable
+import ast
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -267,4 +268,27 @@ class OpenAI_interface(LLMBase):
                 break
         return response, cost_accumulation
 
+
+
+def extract_code(raw_sequence, mode="code"):
+    try:
+        sub1 = "```python"
+        idx1 = raw_sequence.index(sub1)
+    except:
+        try:
+            sub1 = "``` python"
+            idx1 = raw_sequence.index(sub1)
+        except:
+            try:
+                sub1 = "```"
+                idx1 = raw_sequence.index(sub1)
+            except:
+                return raw_sequence
+    sub2 = "```"
+    idx2 = raw_sequence.index(sub2 , idx1 + 1 , )
+    extraction = raw_sequence[idx1 + len(sub1) + 1 : idx2]
+    if mode == "code":
+        return extraction
+    if mode == "python_object":
+        return ast.literal_eval(extraction)
 
