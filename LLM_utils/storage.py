@@ -36,3 +36,18 @@ class Storage_base:
         with open(self.path, "w") as file:
             json.dump(self.information , file , indent=4)  # Use indent=4 for pretty formatting
         print(f"Information is saved to {self.path}.")
+
+    @classmethod
+    def auto_load_save(cls , method) :
+        """
+        Decorator to automatically call self.load_info() before the method
+        and self.save_info() after the method.
+        """
+
+        def wrapper(self , *args , **kwargs) :
+            self.load_info()
+            result = method(self , *args , **kwargs)
+            self.save_info()
+            return result
+
+        return wrapper
