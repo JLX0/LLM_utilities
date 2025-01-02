@@ -3,9 +3,10 @@ import json
 class Storage_base:
     """This class is used to read and write information in a json file"""
 
-    def __init__(self, path):
+    def __init__(self, path, debug=False):
         self.path = path
         self.information = {}
+        self.debug = debug
 
     def load_info(self):
         """
@@ -20,9 +21,11 @@ class Storage_base:
         try:
             with open(self.path, "r") as file:
                 self.information = json.load(file)
-            print(f"Information is loaded from {self.path}.")
+            if self.debug:
+                print(f"Information is loaded from {self.path}.")
         except:
-            print(f"No existing stored information is found in {self.path}.")
+            if self.debug:
+                print(f"No existing stored information is found in {self.path}.")
 
     def save_info(self):
         """
@@ -35,7 +38,8 @@ class Storage_base:
         """
         with open(self.path, "w") as file:
             json.dump(self.information , file , indent=4)  # Use indent=4 for pretty formatting
-        print(f"Information is saved to {self.path}.")
+        if self.debug:
+            print(f"Information is saved to {self.path}.")
 
     @classmethod
     def auto_load_save(cls , method) :
