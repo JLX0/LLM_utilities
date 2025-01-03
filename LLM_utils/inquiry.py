@@ -266,10 +266,24 @@ class OpenAI_interface(LLMBase):
     def ask_with_test(
             self,
             messages: list[ChatCompletionMessageParam],
-            tests: Callable[[str], bool],
+            tests: Callable[[str], str],
             max_trial: int = 10,
             ):
 
+        """
+        This method is only for simple testing functions with retry, such as testing general
+        strings or Python objects (instead of multiple lines of Python code).
+
+        Tests are also supposed to convert the response to the expected type.
+
+        Args:
+            messages:
+            tests:
+            max_trial:
+
+        Returns:
+
+        """
         trial_count=0
         cost_accumulation=0
         while True:
