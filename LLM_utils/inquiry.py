@@ -254,7 +254,7 @@ class OpenAI_interface(LLMBase):
             response , cost = self.ask(messages)
             cost_accumulation += cost
             try:
-                tests(response)
+                response=tests(response)
                 print("Test passed")
                 break
             except Exception as e:
