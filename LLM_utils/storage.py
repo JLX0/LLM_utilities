@@ -55,3 +55,8 @@ class Storage_base:
             return result
 
         return wrapper
+
+def save_python_code(python_code, file_path):
+    with open(file_path, "w") as file:
+        file.write(python_code)
+    print(f"Python code has been saved to {file_path}")
