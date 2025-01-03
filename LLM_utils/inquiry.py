@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletionMessageParam
 import traceback
 
 from LLM_utils.cost import Calculator
-from LLM_utils.fault_tolerance import retry_overtime_decorator
+from LLM_utils.fault_tolerance import retry_overtime_kill
 
 
 def check_and_read_key_file(file_path: str, target_key: str) -> Any:
@@ -101,6 +101,8 @@ class LLMBase:
         self,
         api_key: Optional[str],
         model: str = "gpt-4-mini",
+        timeout: float = 60,
+        maximum_retry: int = 3,
         debug: bool = False,
     ) -> None:
         """
@@ -113,8 +115,9 @@ class LLMBase:
         """
         self.api_key = api_key
         self.model = model
+        self.timeout = timeout
+        self.maximum_retry = maximum_retry
         self.debug = debug
-
 
 
 class OpenAI_interface(LLMBase):
@@ -135,13 +138,14 @@ class OpenAI_interface(LLMBase):
         >>> response = gpt.ask(messages)
     """
 
-    timeout: int = 60
-    maximum_retry: int = 3
+
 
     def __init__(
         self,
         api_key: str,
         model: str = "gpt-4-mini",
+        timeout: float = 60,
+        maximum_retry: int = 3,
         debug: bool = False,
     ) -> None:
         """
@@ -152,7 +156,7 @@ class OpenAI_interface(LLMBase):
             model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
         """
-        super().__init__(api_key, model, debug)
+        super().__init__(api_key, model, timeout, maximum_retry, debug)
 
         if self.model =="deepseek-chat":
             self.client = OpenAI(api_key=api_key , base_url="https://api.deepseek.com")
@@ -178,14 +182,13 @@ class OpenAI_interface(LLMBase):
             if isinstance(message["content"], str):
                 print(message["content"])
 
-    @retry_overtime_decorator(time_limit=timeout, maximum_retry=maximum_retry, ret=True)
-    def ask(
-        self,
-        messages: list[ChatCompletionMessageParam],
-        ret_dict: Optional[dict[str, any]] = None,
-    ) -> Optional[str]:
+    def ask_base(
+            self ,
+            messages: list[ChatCompletionMessageParam] ,
+            ret_dict: Optional[dict[str , any]] = None ,
+            ) -> Optional[str] :
         """
-        Send a message to the chat model and capture the response.
+        Base method to send a message to the chat model and capture the response.
 
         Args:
             messages (list[ChatCompletionMessageParam]): The messages to be sent to the chat model.
@@ -194,52 +197,71 @@ class OpenAI_interface(LLMBase):
 
         Returns:
             Optional[str]: The chat model's response text, or None if the request fails.
-
-        Example:
-            >>> gpt_client = OpenAI_interface(api_key="your-api-key")
-            >>> messages = [
-            ...     {"role": "system", "content": "You are a helpful assistant."},
-            ...     {"role": "user", "content": "What's the weather like?"},
-            ... ]
-            >>> response = gpt_client.ask(messages)
-            >>> if response:
-            ...     print(f"Got response: {response}")
-            ...
         """
-        if self.debug:
+        if self.debug :
             print("---Prompt beginning marker---")
             self.print_prompt(messages)
             print("---Prompt ending marker---")
 
         response: ChatCompletion = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-        )
+            model=self.model ,
+            messages=messages ,
+            )
 
-        if response.choices[0].message.content is None:
+        if response.choices[0].message.content is None :
             return None
 
         response_text: str = response.choices[0].message.content
 
-        if self.debug:
+        if self.debug :
             print("---Response beginning marker---")
             print(response_text)
             print("---Response ending marker---")
 
-        calculator_instance = Calculator(self.model, messages, response_text)
+        calculator_instance = Calculator(self.model , messages , response_text)
 
-        if self.model == "deepseek-chat":
+        if self.model == "deepseek-chat" :
             cost = calculator_instance.calculate_cost_DeepSeek()
-        else:
+        else :
             cost = calculator_instance.calculate_cost_OpenAI()
 
-        if ret_dict is not None:
+        if ret_dict is not None :
             ret_dict["result"] = (
-                response_text,
-                cost,
-            )
+                response_text ,
+                cost ,
+                )
 
         return response_text
+
+    def ask(
+            self ,
+            messages: list[ChatCompletionMessageParam] ,
+            ret_dict: Optional[dict[str , any]] = None ,
+            ) -> Optional[str] :
+        """
+        Send a message to the chat model with retry functionality for handling timeouts.
+
+        Args:
+            messages (list[ChatCompletionMessageParam]): The messages to be sent to the chat model.
+            ret_dict (Optional[dict[str, str]], optional): A dictionary to capture the
+                method's return value. Defaults to None.
+
+        Returns:
+            Optional[str]: The chat model's response text, or None if the request fails.
+        """
+
+        def target_function(ret_dict: dict[str , Any] , *args: Any) -> None :
+            self.ask_base(*args , ret_dict=ret_dict)
+
+        exceeded , result = retry_overtime_kill(
+            target_function=target_function ,
+            target_function_args=(messages ,) ,
+            time_limit=self.timeout ,
+            maximum_retry=self.maximum_retry ,
+            ret=True ,
+            )
+
+        return result.get("result")
 
     def ask_with_test(
             self,
@@ -295,5 +317,3 @@ def extract_code(raw_sequence, language="python", mode="code"):
         return extraction
     if mode == "python_object":
         return ast.literal_eval(extraction)
-
-
