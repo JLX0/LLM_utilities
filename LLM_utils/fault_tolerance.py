@@ -147,7 +147,10 @@ def retry_overtime_decorator(
 
     This decorator wraps a function to provide retry functionality when the function
     execution exceeds a specified time limit. It supports both regular functions
-    and class methods, handling the self parameter appropriately.
+    and class methods, handling the self parameter appropriately. Compared to
+    `retry_overtime_kill`, this decorator could be more efficient. However, this
+    decorator could be less convenient in a class, where the class instance is not
+    available for arguments of the decorator.
 
     Args:
         time_limit: Maximum execution time allowed in seconds per attempt.
