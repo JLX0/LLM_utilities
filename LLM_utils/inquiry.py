@@ -270,13 +270,13 @@ class OpenAI_interface(LLMBase):
 
 
 
-def extract_Python_base(raw_sequence):
+def extract_code_base(raw_sequence, language="python"):
     try:
-        sub1 = "```python"
+        sub1 = f"```{language}"
         idx1 = raw_sequence.index(sub1)
     except:
         try:
-            sub1 = "``` python"
+            sub1 = f"``` {language}"
             idx1 = raw_sequence.index(sub1)
         except:
             try:
@@ -289,9 +289,11 @@ def extract_Python_base(raw_sequence):
     extraction = raw_sequence[idx1 + len(sub1) + 1 : idx2]
     return extraction
 
-def extract_Python(raw_sequence, mode="code"):
-    extraction= extract_Python_base(raw_sequence)
+def extract_code(raw_sequence, language="python", mode="code"):
+    extraction= extract_code_base(raw_sequence, language)
     if mode == "code":
         return extraction
     if mode == "python_object":
         return ast.literal_eval(extraction)
+
+
