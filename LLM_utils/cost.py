@@ -164,3 +164,16 @@ class Calculator:
         cost =self.input_token_length*self.DeepSeek_input_pricing[self.model]+self.output_token_length*self.DeepSeek_output_pricing[self.model]
         cost /= 1e6
         return cost
+
+    def calculate_input_token_length(self, input_sequence, form="list"):
+        if form=="list":
+            self.formatted_input_sequence=PromptBase.list_to_formatted_OpenAI(input_sequence)
+        if form=="formatted":
+            self.formatted_input_sequence=input_sequence
+        if self.model in self.OpenAI_input_pricing:
+            self.calculate_input_token_length_GPT()
+            return self.input_token_length
+        if self.model in self.DeepSeek_input_pricing:
+            self.calculate_token_length_DeepSeek()
+            return self.input_token_length
+
