@@ -1,4 +1,5 @@
 import json
+import os
 
 class Storage_base:
     """This class is used to read and write information in a json file"""
@@ -56,7 +57,17 @@ class Storage_base:
 
         return wrapper
 
-def save_python_code(python_code, file_path):
-    with open(file_path, "w") as file:
+
+def save_python_code(python_code , file_path) :
+    # Extract the directory path from the file_path
+    directory = os.path.dirname(file_path)
+
+    # Create the directory if it doesn't exist
+    if directory and not os.path.exists(directory) :
+        os.makedirs(directory)
+
+    # Save the Python code to the file
+    with open(file_path , "w") as file :
         file.write(python_code)
+
     print(f"Python code has been saved to {file_path}")
