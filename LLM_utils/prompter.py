@@ -45,7 +45,7 @@ class PromptBase:
         self.conversation_history: list[str] = []
 
     @staticmethod
-    def list_to_formatted_OpenAI(prompt: list[str]) -> list[dict[str, str]]:
+    def list_to_formatted_OpenAI(prompt_as_list: list[str]) -> list[dict[str, str]]:
         """
         Format a list of prompt strings into formats compatible with OpenAI interface.
 
@@ -55,7 +55,7 @@ class PromptBase:
         character is prepended to the content.
 
         Args:
-            prompt (list[str]): A list of strings representing the prompt segments to
+            prompt_as_list (list[str]): A list of strings representing the prompt segments to
                 be formatted.
 
         Returns:
@@ -71,7 +71,7 @@ class PromptBase:
             '\\nSecond prompt'
         """
         formatted_prompt: list[dict[str, str]] = []
-        for idx, content in enumerate(prompt):
+        for idx, content in enumerate(prompt_as_list):
             if idx > 0:
                 content = "\n" + content
             formatted_prompt.append({"role": "system", "content": content})
@@ -107,7 +107,6 @@ class PromptBase:
         for segment in formatted_prompt :
             concatenated_string += segment["content"]
         return concatenated_string
-
 
     def print_prompt(self) -> None:
         """

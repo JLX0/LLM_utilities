@@ -4,8 +4,8 @@ from LLM_utils.prompter import PromptBase
 import transformers
 
 class Calculator:
-    # Pricing per 1M input tokens in USD for OpenAI models
-    OpenAI_input_pricing = {
+    # Pricing per 1M input tokens in USD for GPT models
+    GPT_input_pricing = {
         "gpt-4o": 2.50,
         "gpt-4o-2024-11-20": 2.50,
         "gpt-4o-2024-08-06": 2.50,
@@ -41,8 +41,8 @@ class Calculator:
         "deepseek-chat": 0.14,
         }
 
-    # Pricing per 1M output tokens in USD for OpenAI models
-    OpenAI_output_pricing = {
+    # Pricing per 1M output tokens in USD for GPT models
+    GPT_output_pricing = {
         "gpt-4o": 10.00,
         "gpt-4o-2024-11-20": 10.00,
         "gpt-4o-2024-08-06": 10.00,
@@ -129,12 +129,12 @@ class Calculator:
     def calculate_cost_GPT(self):
         if self.formatted_input_sequence is not None:
             self.input_token_length = self.calculate_input_token_length_GPT()
-            input_cost = self.input_token_length * self.OpenAI_input_pricing[self.model] / 1e6
+            input_cost = self.input_token_length * self.GPT_input_pricing[self.model] / 1e6
         else:
             input_cost = 0
         if self.formatted_output_sequence is not None:
             self.output_token_length = self.calculate_output_token_length_GPT()
-            output_cost = self.output_token_length * self.OpenAI_output_pricing[self.model] / 1e6
+            output_cost = self.output_token_length * self.GPT_output_pricing[self.model] / 1e6
         else:
             output_cost = 0
         return input_cost + output_cost
@@ -165,15 +165,135 @@ class Calculator:
         cost /= 1e6
         return cost
 
-    def calculate_input_token_length(self, input_sequence, form="list"):
-        if form=="list":
-            self.formatted_input_sequence=PromptBase.list_to_formatted_OpenAI(input_sequence)
-        if form=="formatted":
-            self.formatted_input_sequence=input_sequence
-        if self.model in self.OpenAI_input_pricing:
-            self.calculate_input_token_length_GPT()
-            return self.input_token_length
-        if self.model in self.DeepSeek_input_pricing:
-            self.calculate_token_length_DeepSeek()
-            return self.input_token_length
+    def calculate_input_token_length(self , input_sequence , form="list") :
+        if form == "list" :
+            self.formatted_input_sequence = PromptBase.list_to_formatted_OpenAI(input_sequence)
+        elif form == "formatted" :
+            self.formatted_input_sequence = input_sequence
+        else :
+            raise ValueError("Invalid form. Use 'list' or 'formatted'.")
 
+        if self.model in self.GPT_input_pricing :
+            self.input_token_length = self.calculate_input_token_length_GPT()
+        elif self.model in self.DeepSeek_input_pricing :
+            self.calculate_token_length_DeepSeek()
+        else :
+            raise ValueError(f"Model {self.model} not supported for token length calculation.")
+
+        return self.input_token_length
+
+    def length_limiter(self , input_sequence , limit , truncation=True ,
+                       include_truncation_warning=True) :
+        self.calculate_input_token_length(input_sequence , form="list")
+
+        if self.input_token_length > limit :
+            print(f"Warning: Input sequence is longer than {limit} tokens.")
+
+            if truncation :
+                # Calculate the token length of the warning message if it will be included
+                warning_message = "---Warning, this information is too long and is truncated---"
+                warning_token_length = self.calculate_input_token_length([warning_message] ,
+                                                                         form="list") if include_truncation_warning else 0
+
+                # Adjust the limit to account for the warning message
+                adjusted_limit = limit - warning_token_length if include_truncation_warning else limit
+
+                # Convert the input sequence to a single string for truncation
+                input_string = " ".join(input_sequence)
+
+                # Calculate the ratio of the adjusted limit to the current token count
+                ratio = adjusted_limit / self.input_token_length
+
+                # Calculate the approximate length of the truncated string
+                truncated_length = int(len(input_string) * ratio)
+
+                # Truncate the string to the calculated length
+                truncated_string = input_string[:truncated_length]
+
+                # Split the truncated string back into a list of strings, preserving the original structure
+                truncated_input_sequence = []
+                current_length = 0
+                for sentence in input_sequence :
+                    if current_length + len(sentence) + 1 <= truncated_length :
+                        truncated_input_sequence.append(sentence)
+                        current_length += len(sentence) + 1  # +1 for the space
+                    else :
+                        # Truncate the last sentence to fit within the limit
+                        remaining_length = truncated_length - current_length
+                        if remaining_length > 0 :
+                            truncated_sentence = sentence[:remaining_length]
+                            truncated_input_sequence.append(truncated_sentence)
+                        break
+
+                # Re-calculate the token length to ensure it's within the adjusted limit
+                self.calculate_input_token_length(truncated_input_sequence , form="list")
+
+                # If the token count is still over the adjusted limit, adjust further
+                while self.input_token_length > adjusted_limit :
+                    ratio *= 0.99  # Reduce the ratio slightly
+                    truncated_length = int(len(input_string) * ratio)
+                    truncated_string = input_string[:truncated_length]
+
+                    # Rebuild the truncated input sequence
+                    truncated_input_sequence = []
+                    current_length = 0
+                    for sentence in input_sequence :
+                        if current_length + len(sentence) + 1 <= truncated_length :
+                            truncated_input_sequence.append(sentence)
+                            current_length += len(sentence) + 1
+                        else :
+                            remaining_length = truncated_length - current_length
+                            if remaining_length > 0 :
+                                truncated_sentence = sentence[:remaining_length]
+                                truncated_input_sequence.append(truncated_sentence)
+                            break
+
+                    # Re-calculate the token length
+                    self.calculate_input_token_length(truncated_input_sequence , form="list")
+
+                # Append the truncation warning if required
+                if include_truncation_warning :
+                    truncated_input_sequence.append(warning_message)
+
+                # Re-calculate the final token length including the warning
+                self.calculate_input_token_length(truncated_input_sequence , form="list")
+
+                print(f"Warning: Input sequence is truncated to be about {limit} tokens.")
+                return truncated_input_sequence
+            else :
+                return input_sequence
+        else :
+            return input_sequence
+
+
+
+if __name__ == "__main__":
+    # Define the model and input sequence
+    model = "gpt-3.5-turbo-0125"
+    input_sequence = [
+        "This is a long input sequence that needs to be truncated.",
+        "Another part of the sequence that adds to the token count.",
+        "This is just some additional text to make the sequence longer.",
+        "The goal is to ensure the length_limiter works as expected."
+    ]
+    limit = 45  # Token limit for testing
+
+    # Create an instance of the Calculator class
+    calculator = Calculator(model)
+
+    # Test the length_limiter method with the warning message
+    print("Original Input Sequence:")
+    print(input_sequence)
+    print("\nToken Count Before Truncation:")
+    input_token_length = calculator.calculate_input_token_length(input_sequence, form="list")
+    print(f"Input Token Length: {input_token_length}")
+
+    # Apply the length_limiter with the warning message
+    truncated_sequence = calculator.length_limiter(input_sequence, limit, include_truncation_warning=True)
+
+    # Print the results
+    print("\nTruncated Input Sequence with Warning:")
+    print(truncated_sequence)
+    print("\nToken Count After Truncation:")
+    calculator.calculate_input_token_length(truncated_sequence, form="list")
+    print(f"Input Token Length: {calculator.input_token_length}")
