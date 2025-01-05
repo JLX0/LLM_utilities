@@ -356,3 +356,42 @@ class PromptBase:
         assembled_input = sequence_assembler(inputs, previous_outputs, evaluations)
 
         return assembled_input
+
+def available_packages_prompt(environment_name: str) -> list[str]:
+    """
+      Creae a prompt string describing the packages installed in the specified Conda environment.
+
+      Args:
+          environment_name (str): Name of the Conda environment.
+
+      Returns:
+          str: A string describing the installed packages in the environment.
+      """
+    # Load packages for the environment
+    packages = load_packages(environment_name)
+
+    # Create the prompt string
+    prompt_string = [
+        f"The Python code will be executed in a Conda environment named '{packages['environment_name']}'. "
+        f"In the Conda environment, the following packages are installed:" ,
+        ""
+        ]
+
+    # Add conda packages to the prompt (only if there are conda packages)
+    if packages["conda"] :
+        prompt_string.append("Conda packages:")
+        prompt_string.append(", ".join(packages["conda"]))
+        prompt_string.append("")
+
+    # Add pip packages to the prompt (only if there are pip packages)
+    if packages["pip"] :
+        prompt_string.append("Pip packages:")
+        prompt_string.append(", ".join(packages["pip"]))
+        prompt_string.append("")
+
+    # Remove the last newline if it exists
+    if prompt_string[-1] == "" :
+        prompt_string.pop()
+
+    # Join the list into a single string with newlines
+    return prompt_string
