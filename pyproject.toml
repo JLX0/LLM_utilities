@@ -46,6 +46,7 @@ dependencies = [
   "PyYAML",
   "openai",
   "tiktoken",
+  "transformers",
 ]
 
 

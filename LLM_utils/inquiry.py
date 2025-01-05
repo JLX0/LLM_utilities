@@ -223,7 +223,7 @@ class OpenAI_interface(LLMBase):
         if self.model == "deepseek-chat" :
             cost = calculator_instance.calculate_cost_DeepSeek()
         else :
-            cost = calculator_instance.calculate_cost_OpenAI()
+            cost = calculator_instance.calculate_cost_GPT()
 
         if ret_dict is not None :
             ret_dict["result"] = (

@@ -19,7 +19,7 @@ class PromptBase:
 
     Example:
         >>> prompt_manager = PromptBase()
-        >>> formatted = prompt_manager.prompt_formatting_OpenAI(["Hello", "World"])
+        >>> formatted = prompt_manager.list_to_formatted_OpenAI(["Hello", "World"])
         >>> len(formatted)
         2
         >>> formatted[0]["content"]
@@ -44,7 +44,8 @@ class PromptBase:
         self.output_history: list[str] = []
         self.conversation_history: list[str] = []
 
-    def prompt_formatting_OpenAI(self, prompt: list[str]) -> list[dict[str, str]]:
+    @staticmethod
+    def list_to_formatted_OpenAI(prompt: list[str]) -> list[dict[str, str]]:
         """
         Format a list of prompt strings into formats compatible with OpenAI interface.
 
@@ -63,7 +64,7 @@ class PromptBase:
 
         Example:
             >>> base = PromptBase()
-            >>> result = base.prompt_formatting_OpenAI(["First prompt", "Second prompt"])
+            >>> result = base.list_to_formatted_OpenAI(["First prompt", "Second prompt"])
             >>> result[0]["content"]
             'First prompt'
             >>> result[1]["content"]
@@ -75,6 +76,38 @@ class PromptBase:
                 content = "\n" + content
             formatted_prompt.append({"role": "system", "content": content})
         return formatted_prompt
+
+    @staticmethod
+    def formatted_to_string_OpenAI(formatted_prompt: list[dict[str , str]]) -> str :
+        """
+        Convert a formatted prompt (list of dictionaries with 'role' and 'content' keys)
+        into a single concatenated string.
+
+        This method takes a list of prompt segments in the OpenAI format and combines them
+        into a single string. The 'role' is ignored, and only the 'content' is used.
+
+        Args:
+            formatted_prompt (list[dict[str, str]]): A list of dictionaries where each
+                dictionary contains 'role' and 'content' keys.
+
+        Returns:
+            str: A single concatenated string of all the 'content' values.
+
+        Example:
+            >>> base = PromptBase()
+            >>> formatted_prompt = [
+            ...     {"role": "system", "content": "First prompt"},
+            ...     {"role": "user", "content": "Second prompt"}
+            ... ]
+            >>> result = base.formatted_to_string_OpenAI(formatted_prompt)
+            >>> print(result)
+            'First prompt\\nSecond prompt'
+        """
+        concatenated_string = ""
+        for segment in formatted_prompt :
+            concatenated_string += segment["content"]
+        return concatenated_string
+
 
     def print_prompt(self) -> None:
         """

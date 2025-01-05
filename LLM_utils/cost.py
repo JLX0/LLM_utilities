@@ -1,5 +1,7 @@
 import tiktoken
-
+import os
+from LLM_utils.prompter import PromptBase
+import transformers
 
 class Calculator:
     # Pricing per 1M input tokens in USD for OpenAI models
@@ -73,10 +75,10 @@ class Calculator:
         self.model = model
         self.formatted_input_sequence = formatted_input_sequence
         self.formatted_output_sequence = formatted_output_sequence
-        self.input_token_length = None
-        self.output_token_length = None
+        self.input_token_length = 0
+        self.output_token_length = 0
 
-    def calculate_input_token_length_OpenAI(self):
+    def calculate_input_token_length_GPT(self):
         """Calculate the number of tokens used by a list of messages."""
         try:
             encoding = tiktoken.encoding_for_model(self.model)
@@ -100,7 +102,7 @@ class Calculator:
         num_tokens += 3  # Every reply is primed with <|start|>assistant<|message|>
         return num_tokens
 
-    def calculate_output_token_length_OpenAI(self):
+    def calculate_output_token_length_GPT(self):
         """
         Calculates the number of tokens in a given output sequence.
 
@@ -124,19 +126,41 @@ class Calculator:
         # Return the token count
         return len(tokens)
 
-    def calculate_cost_OpenAI(self):
+    def calculate_cost_GPT(self):
         if self.formatted_input_sequence is not None:
-            self.input_token_length = self.calculate_input_token_length_OpenAI()
+            self.input_token_length = self.calculate_input_token_length_GPT()
             input_cost = self.input_token_length * self.OpenAI_input_pricing[self.model] / 1e6
         else:
             input_cost = 0
         if self.formatted_output_sequence is not None:
-            self.output_token_length = self.calculate_output_token_length_OpenAI()
+            self.output_token_length = self.calculate_output_token_length_GPT()
             output_cost = self.output_token_length * self.OpenAI_output_pricing[self.model] / 1e6
         else:
             output_cost = 0
         return input_cost + output_cost
 
+    def calculate_token_length_DeepSeek(self):
+
+        tokenizer_relative_path = "tokenizers/deepseek"
+
+        tokenizer_absolute_path = os.path.abspath(tokenizer_relative_path)
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            tokenizer_absolute_path , trust_remote_code=True
+            )
+
+
+        if self.formatted_input_sequence is not None:
+            input_sequence=PromptBase.formatted_to_string_OpenAI(self.formatted_input_sequence)
+            input_tokenized = tokenizer.encode(input_sequence)
+            self.input_token_length = len(input_tokenized)
+        if self.formatted_output_sequence is not None:
+            output_sequence=PromptBase.formatted_to_string_OpenAI(self.formatted_output_sequence)
+            output_tokenized = tokenizer.encode(output_sequence)
+            self.output_token_length = len(output_tokenized)
+
     def calculate_cost_DeepSeek(self):
-        #TODO: implement this
-        return 0
+        self.calculate_token_length_DeepSeek()
+        cost =self.input_token_length*self.DeepSeek_input_pricing[self.model]+self.output_token_length*self.DeepSeek_output_pricing[self.model]
+        cost /= 1e6
+        return cost
