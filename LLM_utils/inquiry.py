@@ -102,7 +102,8 @@ class LLMBase:
         api_key: Optional[str],
         model: str = "gpt-4-mini",
         timeout: float = 60,
-        maximum_retry: int = 3,
+        maximum_generation_attempts: int = 3,
+        maximum_timeout_attempts: int = 3,
         debug: bool = False,
     ) -> None:
         """
@@ -116,7 +117,8 @@ class LLMBase:
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
-        self.maximum_retry = maximum_retry
+        self.maximum_generation_attempts = maximum_generation_attempts
+        self.maximum_timeout_attempts = maximum_timeout_attempts
         self.debug = debug
 
 
@@ -145,7 +147,8 @@ class OpenAI_interface(LLMBase):
         api_key: str,
         model: str = "gpt-4-mini",
         timeout: float = 60,
-        maximum_retry: int = 3,
+        maximum_generation_attempts: int = 3,
+        maximum_timeout_attempts: int = 3,
         debug: bool = False,
     ) -> None:
         """
@@ -156,7 +159,7 @@ class OpenAI_interface(LLMBase):
             model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
         """
-        super().__init__(api_key, model, timeout, maximum_retry, debug)
+        super().__init__(api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug)
 
         if self.model =="deepseek-chat":
             self.client = OpenAI(api_key=api_key , base_url="https://api.deepseek.com")
@@ -185,8 +188,8 @@ class OpenAI_interface(LLMBase):
     def ask_base(
             self ,
             messages: list[ChatCompletionMessageParam] ,
-            ret_dict: Optional[dict[str , any]] = None ,
-            ) -> Optional[str] :
+            ret_dict: Optional[dict[str , Any]] = None ,
+            ) -> tuple[Optional[str] , float] :
         """
         Base method to send a message to the chat model and capture the response.
 
@@ -196,7 +199,8 @@ class OpenAI_interface(LLMBase):
                 method's return value. Defaults to None.
 
         Returns:
-            Optional[str]: The chat model's response text, or None if the request fails.
+            tuple[Optional[str], float]: The chat model's response text and the cost,
+                or (None, 0.0) if the request fails.
         """
         if self.debug :
             print("---Prompt beginning marker---")
@@ -209,7 +213,7 @@ class OpenAI_interface(LLMBase):
             )
 
         if response.choices[0].message.content is None :
-            return None
+            return None , 0.0
 
         response_text: str = response.choices[0].message.content
 
@@ -226,18 +230,15 @@ class OpenAI_interface(LLMBase):
             cost = calculator_instance.calculate_cost_GPT()
 
         if ret_dict is not None :
-            ret_dict["result"] = (
-                response_text ,
-                cost ,
-                )
+            ret_dict["result"] = (response_text , cost)
 
-        return response_text
+        return response_text , cost
 
     def ask(
             self ,
             messages: list[ChatCompletionMessageParam] ,
             ret_dict: Optional[dict[str , any]] = None ,
-            ) -> Optional[str] :
+            ) -> tuple[Optional[str] , float] :
         """
         Send a message to the chat model with retry functionality for handling timeouts.
 
@@ -257,19 +258,22 @@ class OpenAI_interface(LLMBase):
             target_function=target_function ,
             target_function_args=(messages ,) ,
             time_limit=self.timeout ,
-            maximum_retry=self.maximum_retry ,
+            maximum_retry=self.maximum_timeout_attempts ,
             ret=True ,
             )
 
-        return result.get("result")
+        response_text , cost=result.get("result")
+
+        if not exceeded :
+            return response_text,cost
+        else :
+            return "termination_signal" , cost
 
     def ask_with_test(
-            self,
-            messages: list[ChatCompletionMessageParam],
-            tests: Callable[[str], str],
-            max_trial: int = 10,
-            ):
-
+            self ,
+            messages: list[ChatCompletionMessageParam] ,
+            tests: Callable[[str] , str] ,
+            ) -> tuple[Any , float] :
         """
         This method is only for simple testing functions with retry, such as testing general
         strings or Python objects (instead of multiple lines of Python code).
@@ -277,33 +281,50 @@ class OpenAI_interface(LLMBase):
         Tests are also supposed to convert the response to the expected type.
 
         Args:
-            messages:
-            tests:
-            max_trial:
+            messages: The messages to be sent to the chat model.
+            tests: A function to test the response from the chat model.
 
         Returns:
-
+            tuple[Any, float]: The tested response and the accumulated cost.
         """
-        trial_count=0
-        cost_accumulation=0
-        while True:
-            response , cost = self.ask(messages)
+        cost_accumulation = 0.0
+
+        def target_function(ret_dict: dict[str , Any] , *args: Any) -> None :
+            response , cost = self.ask_base(*args , ret_dict=ret_dict)
+            ret_dict["response"] = response
+            ret_dict["cost"] = cost
+
+        for trial_count in range(self.maximum_generation_attempts) :
+            print(
+                f"Sequence generation under testing: attempt {trial_count + 1} of {self.maximum_generation_attempts}")
+            exceeded , result = retry_overtime_kill(
+                target_function=target_function ,
+                target_function_args=(messages ,) ,
+                time_limit=self.timeout ,
+                maximum_retry=self.maximum_timeout_attempts ,
+                # This retry is for timeout, instead of tests
+                ret=True ,
+                )
+
+            if exceeded :
+                print(f"Inquiry timed out for {self.maximum_timeout_attempts} times, retrying...")
+                continue
+
+            response = result.get("response")
+            cost = result.get("cost" , 0.0)
             cost_accumulation += cost
-            try:
-                response=tests(response)
+
+            try :
+                response = tests(response)
                 print("Test passed")
-                break
-            except Exception as e:
+                return response , cost_accumulation
+            except Exception as e :
                 print("Test failed, reason:")
                 print(traceback.format_exc())
                 print("Trying again")
-                continue
-            trial_count+=1
-            if trial_count >= max_trial:
-                print("Maximum trial reached")
-                break
-        return response, cost_accumulation
 
+        print("Maximum trial reached for sequence generation under testing")
+        return "termination_signal" , cost_accumulation
 
 
 def extract_code_base(raw_sequence, language="python"):

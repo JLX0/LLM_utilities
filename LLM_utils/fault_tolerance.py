@@ -121,7 +121,7 @@ def retry_overtime_kill(
         False {'result': 42}
     """
     for attempt in range(maximum_retry):
-        print(f"Attempt {attempt + 1} of {maximum_retry}")
+        print(f"Operation under time limit: attempt {attempt + 1} of {maximum_retry}")
         exceeded, result = overtime_kill(target_function, target_function_args, time_limit, ret)
 
         if not exceeded:
