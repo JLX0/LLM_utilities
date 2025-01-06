@@ -35,10 +35,10 @@ class Calculator:
     }
 
     DeepSeek_input_pricing = {
-        "deepseek-chat": 0.014,
-        }
-    DeepSeek_output_pricing = {
         "deepseek-chat": 0.14,
+        } # assume always cache miss
+    DeepSeek_output_pricing = {
+        "deepseek-chat": 0.28,
         }
 
     # Pricing per 1M output tokens in USD for GPT models
@@ -71,10 +71,10 @@ class Calculator:
         "babbage-002": 0.40,
     }
 
-    def __init__(self, model, formatted_input_sequence=None, formatted_output_sequence=None):
+    def __init__(self, model, formatted_input_sequence=None, output_sequence_string=None):
         self.model = model
         self.formatted_input_sequence = formatted_input_sequence
-        self.formatted_output_sequence = formatted_output_sequence
+        self.output_sequence_string = output_sequence_string
         self.input_token_length = 0
         self.output_token_length = 0
 
@@ -121,7 +121,7 @@ class Calculator:
             tokenizer = tiktoken.get_encoding("cl100k_base")
 
         # Tokenize the output sequence
-        tokens = tokenizer.encode(self.formatted_output_sequence)
+        tokens = tokenizer.encode(self.output_sequence_string)
 
         # Return the token count
         return len(tokens)
@@ -132,7 +132,7 @@ class Calculator:
             input_cost = self.input_token_length * self.GPT_input_pricing[self.model] / 1e6
         else:
             input_cost = 0
-        if self.formatted_output_sequence is not None:
+        if self.output_sequence_string is not None:
             self.output_token_length = self.calculate_output_token_length_GPT()
             output_cost = self.output_token_length * self.GPT_output_pricing[self.model] / 1e6
         else:
@@ -141,22 +141,23 @@ class Calculator:
 
     def calculate_token_length_DeepSeek(self):
 
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+
         tokenizer_relative_path = "tokenizers/deepseek"
 
-        tokenizer_absolute_path = os.path.abspath(tokenizer_relative_path)
+        tokenizer_absolute_path = os.path.join(module_dir , tokenizer_relative_path)
 
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             tokenizer_absolute_path , trust_remote_code=True
             )
 
-
         if self.formatted_input_sequence is not None:
             input_sequence=PromptBase.formatted_to_string_OpenAI(self.formatted_input_sequence)
             input_tokenized = tokenizer.encode(input_sequence)
             self.input_token_length = len(input_tokenized)
-        if self.formatted_output_sequence is not None:
-            output_sequence=PromptBase.formatted_to_string_OpenAI(self.formatted_output_sequence)
-            output_tokenized = tokenizer.encode(output_sequence)
+
+        if self.output_sequence_string is not None:
+            output_tokenized = tokenizer.encode(self.output_sequence_string)
             self.output_token_length = len(output_tokenized)
 
     def calculate_cost_DeepSeek(self):
