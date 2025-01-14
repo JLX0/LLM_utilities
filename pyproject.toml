@@ -103,6 +103,7 @@ bugtracker = "https://example.com/bugtracker"
 # Directories to include in the package distribution
 [tool.setuptools.packages.find]
 include = ["LLM_utils*"]
+include_package_data = true
 
 # Dynamically determines the version of the package
 [tool.setuptools.dynamic]
