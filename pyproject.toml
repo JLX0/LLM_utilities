@@ -100,9 +100,6 @@ bugtracker = "https://example.com/bugtracker"
 # Replace "package_cli" with your package's CLI entry point
 # package_cli = "package_name.cli:main"
 
-[tool.setuptools]
-include_package_data = true
-
 # Directories to include in the package distribution
 [tool.setuptools.packages.find]
 include = ["LLM_utils*"]
