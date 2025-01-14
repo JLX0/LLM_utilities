@@ -2,6 +2,7 @@ import tiktoken
 import os
 from LLM_utils.prompter import PromptBase
 import transformers
+import pkg_resources
 
 class Calculator:
     # Pricing per 1M input tokens in USD for GPT models
@@ -141,7 +142,7 @@ class Calculator:
 
     def calculate_token_length_DeepSeek(self):
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
+        module_dir = pkg_resources.resource_filename('LLM_utils' , '')
 
         tokenizer_relative_path = "tokenizers/deepseek"
 
