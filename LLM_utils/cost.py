@@ -202,13 +202,14 @@ class Calculator:
                 # Convert the input sequence to a single string for truncation
                 input_string = " ".join(input_sequence)
 
-                # Calculate the ratio of the adjusted limit to the current token count
-                ratio = adjusted_limit / self.input_token_length
+                # Calculate the token-to-string length ratio
+                token_to_length_ratio = self.input_token_length / len(input_string)
 
-                # Calculate the approximate length of the truncated string
-                truncated_length = int(len(input_string) * ratio)
+                # Estimate the required reduction percentage
+                required_reduction_ratio = adjusted_limit / self.input_token_length
 
-                # Truncate the string to the calculated length
+                # Apply the estimated reduction
+                truncated_length = int(len(input_string) * required_reduction_ratio)
                 truncated_string = input_string[:truncated_length]
 
                 # Split the truncated string back into a list of strings, preserving the original structure
@@ -229,11 +230,12 @@ class Calculator:
                 # Re-calculate the token length to ensure it's within the adjusted limit
                 self.calculate_input_token_length(truncated_input_sequence , form="list")
 
-                # If the token count is still over the adjusted limit, adjust further
+                # If the token count is still over the adjusted limit, adjust further iteratively
                 while self.input_token_length > adjusted_limit :
-                    ratio *= 0.99  # Reduce the ratio slightly
-                    truncated_length = int(len(input_string) * ratio)
-                    truncated_string = input_string[:truncated_length]
+                    # Re-estimate the required reduction ratio based on the current token count
+                    required_reduction_ratio = adjusted_limit / self.input_token_length
+                    truncated_length = int(len(truncated_string) * required_reduction_ratio)
+                    truncated_string = truncated_string[:truncated_length]
 
                     # Rebuild the truncated input sequence
                     truncated_input_sequence = []
