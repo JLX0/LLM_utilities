@@ -224,7 +224,7 @@ class OpenAI_interface(LLMBase):
 
         calculator_instance = Calculator(self.model , messages , response_text)
 
-        if self.model == "deepseek-chat" :
+        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner" :
             cost = calculator_instance.calculate_cost_DeepSeek()
         else :
             cost = calculator_instance.calculate_cost_GPT()
