@@ -161,7 +161,7 @@ class OpenAI_interface(LLMBase):
         """
         super().__init__(api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug)
 
-        if self.model =="deepseek-chat":
+        if self.model =="deepseek-chat" or self.model =="deepseek-reasoner":
             self.client = OpenAI(api_key=api_key , base_url="https://api.deepseek.com")
         else:
             self.client = OpenAI(api_key=api_key)
