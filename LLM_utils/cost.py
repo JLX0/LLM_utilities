@@ -36,9 +36,11 @@ class Calculator:
 
     DeepSeek_input_pricing = {
         "deepseek-chat": 0.14,
+        "deepseek-reasoner":0.55,
         } # assume always cache miss
     DeepSeek_output_pricing = {
         "deepseek-chat": 0.28,
+        "deepseek-reasoner":2.19,
         }
 
     # Pricing per 1M output tokens in USD for GPT models
