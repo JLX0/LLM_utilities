@@ -45,14 +45,14 @@ class PromptBase:
         self.conversation_history: list[str] = []
 
     @staticmethod
-    def list_to_formatted_OpenAI(prompt_as_list: list[str], model: str|None=None) -> list[dict[str, str]]:
+    def list_to_formatted_OpenAI(prompt_as_list: list[str]) -> list[
+        dict[str , str]] :
         """
         Format a list of prompt strings into formats compatible with OpenAI interface.
 
         This method takes a list of strings and converts them into the format expected
-        by GPT-style models, where each prompt segment is represented as a dictionary
-        with 'role' and 'content' keys. For all segments after the first one, a newline
-        character is prepended to the content.
+        by OpenAI-style models, where all prompt segments are combined into a single content
+        string, separated by newline characters.
 
         Args:
             prompt_as_list (list[str]): A list of strings representing the prompt segments to
@@ -60,21 +60,16 @@ class PromptBase:
 
         Returns:
             list[dict[str, str]]: A list of dictionaries where each dictionary contains
-                'role' and 'content' keys.
+                'role' and 'content' keys. The list will contain only one dictionary.
 
         Example:
             >>> base = PromptBase()
             >>> result = base.list_to_formatted_OpenAI(["First prompt", "Second prompt"])
             >>> result[0]["content"]
-            'First prompt'
-            >>> result[1]["content"]
-            '\\nSecond prompt'
+            'First prompt\nSecond prompt'
         """
-        formatted_prompt: list[dict[str, str]] = []
-        for idx, content in enumerate(prompt_as_list):
-            if idx > 0:
-                content = "\n" + content
-            formatted_prompt.append({"role": "user", "content": content})
+        combined_content = "\n".join(prompt_as_list)
+        formatted_prompt = [{ "role" : "user" , "content" : combined_content }]
         return formatted_prompt
 
     @staticmethod
