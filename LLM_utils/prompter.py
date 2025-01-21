@@ -45,7 +45,7 @@ class PromptBase:
         self.conversation_history: list[str] = []
 
     @staticmethod
-    def list_to_formatted_OpenAI(prompt_as_list: list[str]) -> list[dict[str, str]]:
+    def list_to_formatted_OpenAI(prompt_as_list: list[str], model: str|None=None) -> list[dict[str, str]]:
         """
         Format a list of prompt strings into formats compatible with OpenAI interface.
 
@@ -74,7 +74,7 @@ class PromptBase:
         for idx, content in enumerate(prompt_as_list):
             if idx > 0:
                 content = "\n" + content
-            formatted_prompt.append({"role": "system", "content": content})
+            formatted_prompt.append({"role": "user", "content": content})
         return formatted_prompt
 
     @staticmethod
