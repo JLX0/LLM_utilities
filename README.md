@@ -22,3 +22,6 @@ Python: >= 3.10
 
 2. `pip install .` (for ordinary installation)
 
+TODOs:
+
+1. Lint

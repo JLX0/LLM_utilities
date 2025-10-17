@@ -3,7 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 from typing import Callable
+
 from LLM_utils.environment import load_packages
+
 
 class PromptBase:
     """
@@ -45,8 +47,7 @@ class PromptBase:
         self.conversation_history: list[str] = []
 
     @staticmethod
-    def list_to_formatted_OpenAI(prompt_as_list: list[str]) -> list[
-        dict[str , str]] :
+    def list_to_formatted_OpenAI(prompt_as_list: list[str]) -> list[dict[str, str]]:
         """
         Format a list of prompt strings into formats compatible with OpenAI interface.
 
@@ -69,11 +70,11 @@ class PromptBase:
             'First prompt\nSecond prompt'
         """
         combined_content = "\n".join(prompt_as_list)
-        formatted_prompt = [{ "role" : "user" , "content" : combined_content }]
+        formatted_prompt = [{"role": "user", "content": combined_content}]
         return formatted_prompt
 
     @staticmethod
-    def formatted_to_string_OpenAI(formatted_prompt: list[dict[str , str]]) -> str :
+    def formatted_to_string_OpenAI(formatted_prompt: list[dict[str, str]]) -> str:
         """
         Convert a formatted prompt (list of dictionaries with 'role' and 'content' keys)
         into a single concatenated string.
@@ -99,7 +100,7 @@ class PromptBase:
             'First prompt\\nSecond prompt'
         """
         concatenated_string = ""
-        for segment in formatted_prompt :
+        for segment in formatted_prompt:
             concatenated_string += segment["content"]
         return concatenated_string
 
@@ -384,40 +385,41 @@ class PromptBase:
 
         return assembled_input
 
+
 def available_packages_prompt(environment_name: str) -> list[str]:
     """
-      Creae a prompt string describing the packages installed in the specified Conda environment.
+    Creae a prompt string describing the packages installed in the specified Conda environment.
 
-      Args:
-          environment_name (str): Name of the Conda environment.
+    Args:
+        environment_name (str): Name of the Conda environment.
 
-      Returns:
-          str: A string describing the installed packages in the environment.
-      """
+    Returns:
+        str: A string describing the installed packages in the environment.
+    """
     # Load packages for the environment
     packages = load_packages(environment_name)
 
     # Create the prompt string
     prompt_string = [
         f"The Python code will be executed in a Conda environment named '{packages['environment_name']}'. "
-        f"In the Conda environment, the following packages are installed:" ,
-        ""
-        ]
+        f"In the Conda environment, the following packages are installed:",
+        "",
+    ]
 
     # Add conda packages to the prompt (only if there are conda packages)
-    if packages["conda"] :
+    if packages["conda"]:
         prompt_string.append("Conda packages:")
         prompt_string.append(", ".join(packages["conda"]))
         prompt_string.append("")
 
     # Add pip packages to the prompt (only if there are pip packages)
-    if packages["pip"] :
+    if packages["pip"]:
         prompt_string.append("Pip packages:")
         prompt_string.append(", ".join(packages["pip"]))
         prompt_string.append("")
 
     # Remove the last newline if it exists
-    if prompt_string[-1] == "" :
+    if prompt_string[-1] == "":
         prompt_string.pop()
 
     # Join the list into a single string with newlines

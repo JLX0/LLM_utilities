@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
+import traceback
 from typing import Any
-from typing import Optional
 from typing import Callable
-import ast
+from typing import Optional
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from openai.types.chat import ChatCompletionMessageParam
-import traceback
 
 from LLM_utils.cost import Calculator
 from LLM_utils.fault_tolerance import retry_overtime_kill
@@ -57,7 +57,10 @@ def check_and_read_key_file(file_path: str, target_key: str) -> Any:
 
     return data.get(target_key, -1)
 
-def get_api_key(base_path: str, target_key: str, default_key: str = "type_your_key_here_or_use_key.json") -> str:
+
+def get_api_key(
+    base_path: str, target_key: str, default_key: str = "type_your_key_here_or_use_key.json"
+) -> str:
     """
     Retrieve the API key from a file or use a default value.
 
@@ -76,7 +79,6 @@ def get_api_key(base_path: str, target_key: str, default_key: str = "type_your_k
     """
     key = check_and_read_key_file(base_path, target_key)
     return default_key if key == -1 else key
-
 
 
 class LLMBase:
@@ -140,8 +142,6 @@ class OpenAI_interface(LLMBase):
         >>> response = gpt.ask(messages)
     """
 
-
-
     def __init__(
         self,
         api_key: str,
@@ -159,10 +159,12 @@ class OpenAI_interface(LLMBase):
             model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
         """
-        super().__init__(api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug)
+        super().__init__(
+            api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
+        )
 
-        if self.model =="deepseek-chat" or self.model =="deepseek-reasoner":
-            self.client = OpenAI(api_key=api_key , base_url="https://api.deepseek.com")
+        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
+            self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
         else:
             self.client = OpenAI(api_key=api_key)
 
@@ -186,10 +188,10 @@ class OpenAI_interface(LLMBase):
                 print(message["content"])
 
     def ask_base(
-            self ,
-            messages: list[ChatCompletionMessageParam] ,
-            ret_dict: Optional[dict[str , Any]] = None ,
-            ) -> tuple[Optional[str] , float] :
+        self,
+        messages: list[ChatCompletionMessageParam],
+        ret_dict: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[str], float]:
         """
         Base method to send a message to the chat model and capture the response.
 
@@ -202,43 +204,43 @@ class OpenAI_interface(LLMBase):
             tuple[Optional[str], float]: The chat model's response text and the cost,
                 or (None, 0.0) if the request fails.
         """
-        if self.debug :
+        if self.debug:
             print("---Prompt beginning marker---")
             self.print_prompt(messages)
             print("---Prompt ending marker---")
 
         response: ChatCompletion = self.client.chat.completions.create(
-            model=self.model ,
-            messages=messages ,
-            )
+            model=self.model,
+            messages=messages,
+        )
 
-        if response.choices[0].message.content is None :
-            return None , 0.0
+        if response.choices[0].message.content is None:
+            return None, 0.0
 
         response_text: str = response.choices[0].message.content
 
-        if self.debug :
+        if self.debug:
             print("---Response beginning marker---")
             print(response_text)
             print("---Response ending marker---")
 
-        calculator_instance = Calculator(self.model , messages , response_text)
+        calculator_instance = Calculator(self.model, messages, response_text)
 
-        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner" :
+        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
             cost = calculator_instance.calculate_cost_DeepSeek()
-        else :
+        else:
             cost = calculator_instance.calculate_cost_GPT()
 
-        if ret_dict is not None :
-            ret_dict["result"] = (response_text , cost)
+        if ret_dict is not None:
+            ret_dict["result"] = (response_text, cost)
 
-        return response_text , cost
+        return response_text, cost
 
     def ask(
-            self ,
-            messages: list[ChatCompletionMessageParam] ,
-            ret_dict: Optional[dict[str , any]] = None ,
-            ) -> tuple[Optional[str] , float] :
+        self,
+        messages: list[ChatCompletionMessageParam],
+        ret_dict: Optional[dict[str, any]] = None,
+    ) -> tuple[Optional[str], float]:
         """
         Send a message to the chat model with retry functionality for handling timeouts.
 
@@ -251,29 +253,29 @@ class OpenAI_interface(LLMBase):
             Optional[str]: The chat model's response text, or None if the request fails.
         """
 
-        def target_function(ret_dict: dict[str , Any] , *args: Any) -> None :
-            self.ask_base(*args , ret_dict=ret_dict)
+        def target_function(ret_dict: dict[str, Any], *args: Any) -> None:
+            self.ask_base(*args, ret_dict=ret_dict)
 
-        exceeded , result = retry_overtime_kill(
-            target_function=target_function ,
-            target_function_args=(messages ,) ,
-            time_limit=self.timeout ,
-            maximum_retry=self.maximum_timeout_attempts ,
-            ret=True ,
-            )
+        exceeded, result = retry_overtime_kill(
+            target_function=target_function,
+            target_function_args=(messages,),
+            time_limit=self.timeout,
+            maximum_retry=self.maximum_timeout_attempts,
+            ret=True,
+        )
 
-        response_text , cost=result.get("result")
+        response_text, cost = result.get("result")
 
-        if not exceeded :
-            return response_text,cost
-        else :
-            return "termination_signal" , cost
+        if not exceeded:
+            return response_text, cost
+        else:
+            return "termination_signal", cost
 
     def ask_with_test(
-            self ,
-            messages: list[ChatCompletionMessageParam] ,
-            tests: Callable[[str] , str] ,
-            ) -> tuple[Any , float] :
+        self,
+        messages: list[ChatCompletionMessageParam],
+        tests: Callable[[str], str],
+    ) -> tuple[Any, float]:
         """
         This method is only for simple testing functions with retry, such as testing general
         strings or Python objects (instead of multiple lines of Python code).
@@ -289,42 +291,43 @@ class OpenAI_interface(LLMBase):
         """
         cost_accumulation = 0.0
 
-        def target_function(ret_dict: dict[str , Any] , *args: Any) -> None :
-            response , cost = self.ask_base(*args , ret_dict=ret_dict)
+        def target_function(ret_dict: dict[str, Any], *args: Any) -> None:
+            response, cost = self.ask_base(*args, ret_dict=ret_dict)
             ret_dict["response"] = response
             ret_dict["cost"] = cost
 
-        for trial_count in range(self.maximum_generation_attempts) :
+        for trial_count in range(self.maximum_generation_attempts):
             print(
-                f"Sequence generation under testing: attempt {trial_count + 1} of {self.maximum_generation_attempts}")
-            exceeded , result = retry_overtime_kill(
-                target_function=target_function ,
-                target_function_args=(messages ,) ,
-                time_limit=self.timeout ,
-                maximum_retry=self.maximum_timeout_attempts ,
+                f"Sequence generation under testing: attempt {trial_count + 1} of {self.maximum_generation_attempts}"
+            )
+            exceeded, result = retry_overtime_kill(
+                target_function=target_function,
+                target_function_args=(messages,),
+                time_limit=self.timeout,
+                maximum_retry=self.maximum_timeout_attempts,
                 # This retry is for timeout, instead of tests
-                ret=True ,
-                )
+                ret=True,
+            )
 
-            if exceeded :
+            if exceeded:
                 print(f"Inquiry timed out for {self.maximum_timeout_attempts} times, retrying...")
                 continue
 
             response = result.get("response")
-            cost = result.get("cost" , 0.0)
+            cost = result.get("cost", 0.0)
             cost_accumulation += cost
 
-            try :
+            try:
                 response = tests(response)
                 print("Test passed")
-                return response , cost_accumulation
-            except Exception as e :
+                return response, cost_accumulation
+            except Exception as e:
                 print("Test failed, reason:")
                 print(traceback.format_exc())
                 print("Trying again")
 
         print("Maximum trial reached for sequence generation under testing")
-        return "termination_signal" , cost_accumulation
+        return "termination_signal", cost_accumulation
 
 
 def extract_code_base(raw_sequence, language="python"):
@@ -342,12 +345,16 @@ def extract_code_base(raw_sequence, language="python"):
             except:
                 return raw_sequence
     sub2 = "```"
-    idx2 = raw_sequence.index(sub2 , idx1 + 1 , )
+    idx2 = raw_sequence.index(
+        sub2,
+        idx1 + 1,
+    )
     extraction = raw_sequence[idx1 + len(sub1) + 1 : idx2]
     return extraction
 
+
 def extract_code(raw_sequence, language="python", mode="code"):
-    extraction= extract_code_base(raw_sequence, language)
+    extraction = extract_code_base(raw_sequence, language)
     if mode == "code":
         return extraction
     if mode == "python_object":

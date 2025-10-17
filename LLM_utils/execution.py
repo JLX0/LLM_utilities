@@ -1,8 +1,9 @@
+import os
 import subprocess
 import sys
-import os
 import threading
 from typing import List
+
 
 def execute_bash(command: str, print_progress: bool = False) -> (int, str):
     """
@@ -35,7 +36,7 @@ def execute_bash(command: str, print_progress: bool = False) -> (int, str):
 
     # Function to handle real-time printing and capturing output
     def handle_output(stream, is_stderr: bool = False):
-        for line in iter(stream.readline, ''):  # Read line by line
+        for line in iter(stream.readline, ""):  # Read line by line
             output_lines.append(line)  # Capture the line
             if print_progress:
                 # Print to the appropriate stream (stdout or stderr)
