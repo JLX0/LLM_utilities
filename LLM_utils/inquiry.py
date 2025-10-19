@@ -12,6 +12,12 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from openai.types.chat import ChatCompletionMessageParam
 
+import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
+import time
+import random
+
 from LLM_utils.cost import Calculator
 from LLM_utils.fault_tolerance import retry_overtime_kill
 
@@ -59,7 +65,7 @@ def check_and_read_key_file(file_path: str, target_key: str) -> Any:
 
 
 def get_api_key(
-    base_path: str, target_key: str, default_key: str = "type_your_key_here_or_use_key.json"
+        base_path: str, target_key: str, default_key: str = "type_your_key_here_or_use_key.json"
 ) -> str:
     """
     Retrieve the API key from a file or use a default value.
@@ -83,14 +89,17 @@ def get_api_key(
 
 class LLMBase:
     """
-    Base class for all LLMs.
+    Base class for all LLMs with shared functionality.
 
-    This class serves as the foundation for different language model implementations,
-    providing common functionality and attributes.
+    This class provides common methods for interacting with language models,
+    including debug printing, timeout handling, and test-based generation.
 
     Attributes:
         api_key (Optional[str]): The API key for authentication.
         model (str): The LLM model identifier being used.
+        timeout (float): Maximum time limit for API calls.
+        maximum_generation_attempts (int): Max attempts for generation with tests.
+        maximum_timeout_attempts (int): Max retry attempts for timeouts/throttling.
         debug (bool): Flag indicating if debug mode is enabled.
 
     Example:
@@ -100,13 +109,13 @@ class LLMBase:
     """
 
     def __init__(
-        self,
-        api_key: Optional[str],
-        model: str = "gpt-4-mini",
-        timeout: float = 60,
-        maximum_generation_attempts: int = 3,
-        maximum_timeout_attempts: int = 3,
-        debug: bool = False,
+            self,
+            api_key: Optional[str],
+            model: str = "gpt-4-mini",
+            timeout: float = 60,
+            maximum_generation_attempts: int = 3,
+            maximum_timeout_attempts: int = 3,
+            debug: bool = False,
     ) -> None:
         """
         Initialize the base LLM.
@@ -114,6 +123,9 @@ class LLMBase:
         Args:
             api_key (Optional[str]): The API key for authentication.
             model (str, optional): The LLM model identifier to use. Defaults to 'gpt-4-mini'.
+            timeout (float, optional): Maximum time limit for API calls. Defaults to 60.
+            maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
+            maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 3.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
         """
         self.api_key = api_key
@@ -122,51 +134,6 @@ class LLMBase:
         self.maximum_generation_attempts = maximum_generation_attempts
         self.maximum_timeout_attempts = maximum_timeout_attempts
         self.debug = debug
-
-
-class OpenAI_interface(LLMBase):
-    """
-    A client for interacting with OpenAI's interface
-
-    This class provides methods to communicate with models through OpenAI's API,
-    with built-in retry functionality for handling timeouts.
-
-    Attributes:
-        timeout (int): Maximum time limit for API calls.
-        maximum_retry (int): Maximum number of retry attempts.
-        client (OpenAI): The OpenAI client instance for making API calls.
-
-    Example:
-        >>> gpt = OpenAI(api_key="your-key", model="gpt-4")
-        >>> messages = [{"role": "user", "content": "Hello!"}]
-        >>> response = gpt.ask(messages)
-    """
-
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "gpt-4-mini",
-        timeout: float = 60,
-        maximum_generation_attempts: int = 3,
-        maximum_timeout_attempts: int = 3,
-        debug: bool = False,
-    ) -> None:
-        """
-        Initialize the OpenAI client.
-
-        Args:
-            api_key (str): The OpenAI API key for authentication.
-            model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
-            debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
-        """
-        super().__init__(
-            api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
-        )
-
-        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
-            self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-        else:
-            self.client = OpenAI(api_key=api_key)
 
     @staticmethod
     def print_prompt(messages: list[ChatCompletionMessageParam]) -> None:
@@ -181,76 +148,66 @@ class OpenAI_interface(LLMBase):
             ...     {"role": "system", "content": "You are a helpful assistant."},
             ...     {"role": "user", "content": "Hello!"},
             ... ]
-            >>> OpenAI_interface.print_prompt(messages)
+            >>> LLMBase.print_prompt(messages)
         """
         for message in messages:
             if isinstance(message["content"], str):
                 print(message["content"])
 
-    def ask_base(
-        self,
-        messages: list[ChatCompletionMessageParam],
-        ret_dict: Optional[dict[str, Any]] = None,
-    ) -> tuple[Optional[str], float]:
-        """
-        Base method to send a message to the chat model and capture the response.
-
-        Args:
-            messages (list[ChatCompletionMessageParam]): The messages to be sent to the chat model.
-            ret_dict (Optional[dict[str, str]], optional): A dictionary to capture the
-                method's return value. Defaults to None.
-
-        Returns:
-            tuple[Optional[str], float]: The chat model's response text and the cost,
-                or (None, 0.0) if the request fails.
-        """
+    def _print_debug_prompt(self, messages: list[ChatCompletionMessageParam]) -> None:
+        """Print prompt if debug mode is enabled."""
         if self.debug:
             print("---Prompt beginning marker---")
             self.print_prompt(messages)
             print("---Prompt ending marker---")
 
-        response: ChatCompletion = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-        )
-
-        if response.choices[0].message.content is None:
-            return None, 0.0
-
-        response_text: str = response.choices[0].message.content
-
+    def _print_debug_response(self, response_text: str) -> None:
+        """Print response if debug mode is enabled."""
         if self.debug:
             print("---Response beginning marker---")
             print(response_text)
             print("---Response ending marker---")
 
-        calculator_instance = Calculator(self.model, messages, response_text)
-
-        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
-            cost = calculator_instance.calculate_cost_DeepSeek()
-        else:
-            cost = calculator_instance.calculate_cost_GPT()
-
-        if ret_dict is not None:
-            ret_dict["result"] = (response_text, cost)
-
-        return response_text, cost
-
-    def ask(
-        self,
-        messages: list[ChatCompletionMessageParam],
-        ret_dict: Optional[dict[str, any]] = None,
+    def ask_base(
+            self,
+            messages: list[ChatCompletionMessageParam],
+            ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
-        Send a message to the chat model with retry functionality for handling timeouts.
+        Base method to send a message to the LLM. Must be implemented by subclasses.
 
         Args:
-            messages (list[ChatCompletionMessageParam]): The messages to be sent to the chat model.
-            ret_dict (Optional[dict[str, str]], optional): A dictionary to capture the
+            messages (list[ChatCompletionMessageParam]): The messages to be sent.
+            ret_dict (Optional[dict[str, Any]], optional): A dictionary to capture the
                 method's return value. Defaults to None.
 
         Returns:
-            Optional[str]: The chat model's response text, or None if the request fails.
+            tuple[Optional[str], float]: The response text and the cost,
+                or (None, 0.0) if the request fails.
+
+        Raises:
+            NotImplementedError: If not implemented by subclass.
+        """
+        raise NotImplementedError("Subclasses must implement ask_base()")
+
+    def ask(
+            self,
+            messages: list[ChatCompletionMessageParam],
+            ret_dict: Optional[dict[str, any]] = None,
+    ) -> tuple[Optional[str], float]:
+        """
+        Send a message to the LLM with retry functionality for handling timeouts.
+
+        This method wraps ask_base() with timeout handling using retry_overtime_kill.
+
+        Args:
+            messages (list[ChatCompletionMessageParam]): The messages to be sent.
+            ret_dict (Optional[dict[str, any]], optional): A dictionary to capture the
+                method's return value. Defaults to None.
+
+        Returns:
+            tuple[Optional[str], float]: The response text and cost, or
+                ("termination_signal", cost) if timeouts are exceeded.
         """
 
         def target_function(ret_dict: dict[str, Any], *args: Any) -> None:
@@ -264,30 +221,32 @@ class OpenAI_interface(LLMBase):
             ret=True,
         )
 
-        response_text, cost = result.get("result")
+        response_text, cost = result.get("result", (None, 0.0))
 
-        if not exceeded:
+        if not exceeded and response_text:
             return response_text, cost
         else:
             return "termination_signal", cost
 
     def ask_with_test(
-        self,
-        messages: list[ChatCompletionMessageParam],
-        tests: Callable[[str], str],
+            self,
+            messages: list[ChatCompletionMessageParam],
+            tests: Callable[[str], str],
     ) -> tuple[Any, float]:
         """
-        This method is only for simple testing functions with retry, such as testing general
-        strings or Python objects (instead of multiple lines of Python code).
+        Send a message with testing function and retry on test failures.
 
+        This method is for simple testing functions with retry, such as testing general
+        strings or Python objects (instead of multiple lines of Python code).
         Tests are also supposed to convert the response to the expected type.
 
         Args:
-            messages: The messages to be sent to the chat model.
-            tests: A function to test the response from the chat model.
+            messages (list[ChatCompletionMessageParam]): The messages to send.
+            tests (Callable[[str], str]): A function to test and convert the response.
 
         Returns:
-            tuple[Any, float]: The tested response and the accumulated cost.
+            tuple[Any, float]: The tested/converted response and the accumulated cost,
+                or ("termination_signal", accumulated_cost) if all attempts fail.
         """
         cost_accumulation = 0.0
 
@@ -298,14 +257,15 @@ class OpenAI_interface(LLMBase):
 
         for trial_count in range(self.maximum_generation_attempts):
             print(
-                f"Sequence generation under testing: attempt {trial_count + 1} of {self.maximum_generation_attempts}"
+                f"Sequence generation under testing: attempt {trial_count + 1} "
+                f"of {self.maximum_generation_attempts}"
             )
+
             exceeded, result = retry_overtime_kill(
                 target_function=target_function,
                 target_function_args=(messages,),
                 time_limit=self.timeout,
                 maximum_retry=self.maximum_timeout_attempts,
-                # This retry is for timeout, instead of tests
                 ret=True,
             )
 
@@ -330,7 +290,320 @@ class OpenAI_interface(LLMBase):
         return "termination_signal", cost_accumulation
 
 
+class OpenAI_interface(LLMBase):
+    """
+    A client for interacting with OpenAI's interface.
+
+    This class provides methods to communicate with models through OpenAI's API,
+    with built-in retry functionality for handling timeouts.
+
+    Attributes:
+        client (OpenAI): The OpenAI client instance for making API calls.
+
+    Example:
+        >>> gpt = OpenAI_interface(api_key="your-key", model="gpt-4")
+        >>> messages = [{"role": "user", "content": "Hello!"}]
+        >>> response, cost = gpt.ask(messages)
+    """
+
+    def __init__(
+            self,
+            api_key: str,
+            model: str = "gpt-4-mini",
+            timeout: float = 60,
+            maximum_generation_attempts: int = 3,
+            maximum_timeout_attempts: int = 3,
+            debug: bool = False,
+    ) -> None:
+        """
+        Initialize the OpenAI client.
+
+        Args:
+            api_key (str): The OpenAI API key for authentication.
+            model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
+            timeout (float, optional): Maximum time limit for API calls. Defaults to 60.
+            maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
+            maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 3.
+            debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
+        """
+        super().__init__(
+            api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
+        )
+
+        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
+            self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+        else:
+            self.client = OpenAI(api_key=api_key)
+
+    def ask_base(
+            self,
+            messages: list[ChatCompletionMessageParam],
+            ret_dict: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[str], float]:
+        """
+        Base method to send a message to the chat model and capture the response.
+
+        Args:
+            messages (list[ChatCompletionMessageParam]): The messages to be sent to the chat model.
+            ret_dict (Optional[dict[str, Any]], optional): A dictionary to capture the
+                method's return value. Defaults to None.
+
+        Returns:
+            tuple[Optional[str], float]: The chat model's response text and the cost,
+                or (None, 0.0) if the request fails.
+        """
+        self._print_debug_prompt(messages)
+
+        response: ChatCompletion = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+        )
+
+        if response.choices[0].message.content is None:
+            return None, 0.0
+
+        response_text: str = response.choices[0].message.content
+        self._print_debug_response(response_text)
+
+        # Calculate cost
+        calculator_instance = Calculator(self.model, messages, response_text)
+
+        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
+            cost = calculator_instance.calculate_cost_DeepSeek()
+        else:
+            cost = calculator_instance.calculate_cost_GPT()
+
+        if ret_dict is not None:
+            ret_dict["result"] = (response_text, cost)
+
+        return response_text, cost
+
+
+class Anthropic_Bedrock_interface(LLMBase):
+    """
+    A client for interacting with Claude models through AWS Bedrock.
+
+    Provides methods to communicate with Anthropic models through AWS Bedrock API,
+    with built-in retry functionality for handling throttling and timeouts.
+
+    Attributes:
+        client: The Bedrock runtime client.
+        bedrock_model_id (str): The full Bedrock model identifier.
+        region_name (str): AWS region for Bedrock.
+
+    Example:
+        >>> claude = Anthropic_Bedrock_interface(model="claude-sonnet-4")
+        >>> messages = [{"role": "user", "content": "Hello!"}]
+        >>> response, cost = claude.ask(messages)
+    """
+
+    # Model ID mapping - ALL models now use inference profiles for Bedrock compatibility
+    MODEL_IDS = {
+        # Map friendly names to INFERENCE PROFILE IDs (not direct model IDs)
+        # Using "global." prefix for best availability (auto-routing across regions)
+
+        # Haiku family
+        "claude-haiku-3": "anthropic.claude-3-haiku-20240307-v1:0",  # Older model, direct ID works
+        "claude-3-haiku": "anthropic.claude-3-haiku-20240307-v1:0",
+        "claude-haiku-3.5": "us.anthropic.claude-3-5-haiku-20241022-v1:0",  # Newer, needs profile
+        "claude-3-5-haiku": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "claude-haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "claude-4-5-haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+
+        # Sonnet family - ALL require inference profiles
+        "claude-sonnet-3.5": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "claude-3-5-sonnet": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "claude-sonnet-3.7": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "claude-3-7-sonnet": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "claude-sonnet-4": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+        "claude-4-sonnet": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+        "claude-sonnet-4.5": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "claude-4-5-sonnet": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+
+        # Opus family
+        "claude-opus-3": "anthropic.claude-3-opus-20240229-v1:0",  # Older model, direct ID works
+        "claude-3-opus": "anthropic.claude-3-opus-20240229-v1:0",
+        "claude-opus-4": "us.anthropic.claude-opus-4-20250514-v1:0",
+        "claude-4-opus": "us.anthropic.claude-opus-4-20250514-v1:0",
+    }
+
+    def __init__(
+            self,
+            api_key: Optional[str] = None,  # Not used for Bedrock, but kept for compatibility
+            model: str = "claude-sonnet-4.5",
+            region_name: str = "us-east-1",
+            timeout: float = 300,
+            maximum_generation_attempts: int = 3,
+            maximum_timeout_attempts: int = 10,
+            debug: bool = False,
+    ) -> None:
+        """
+        Initialize the Anthropic Bedrock client.
+
+        Args:
+            api_key (Optional[str]): Not used (Bedrock uses AWS credentials), kept for compatibility.
+            model (str, optional): Model name (will be mapped to Bedrock ID). Defaults to 'claude-sonnet-4'.
+            region_name (str, optional): AWS region for Bedrock. Defaults to 'us-east-1'.
+            timeout (float, optional): Maximum time limit for API calls. Defaults to 300.
+            maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
+            maximum_timeout_attempts (int, optional): Max retry attempts for throttling. Defaults to 10.
+            debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
+        """
+        super().__init__(
+            api_key, model, timeout, maximum_generation_attempts,
+            maximum_timeout_attempts, debug
+        )
+
+        self.region_name = region_name
+
+        # SDK-level retry configuration with adaptive throttling
+        sdk_config = Config(
+            connect_timeout=5,
+            read_timeout=int(timeout),
+            retries={
+                "total_max_attempts": 8,
+                "mode": "adaptive"  # Client-side rate-limiting
+            }
+        )
+
+        self.client = boto3.client(
+            "bedrock-runtime",
+            region_name=region_name,
+            config=sdk_config
+        )
+
+        # Get the full Bedrock model ID
+        self.bedrock_model_id = self.MODEL_IDS.get(model, model)
+
+    def _convert_messages(
+            self, messages: list[ChatCompletionMessageParam]
+    ) -> tuple[Optional[str], list[dict]]:
+        """
+        Convert OpenAI-style messages to Bedrock format.
+
+        Args:
+            messages (list[ChatCompletionMessageParam]): OpenAI-formatted messages.
+
+        Returns:
+            tuple[Optional[str], list[dict]]: (system_message, converted_messages)
+        """
+        system_message = None
+        converted_messages = []
+
+        for m in messages:
+            if m["role"] == "system":
+                system_message = m["content"]
+                continue
+            converted_messages.append({
+                "role": m["role"],
+                "content": [{"text": m["content"]}]
+            })
+
+        return system_message, converted_messages
+
+    def ask_base(
+            self,
+            messages: list[ChatCompletionMessageParam],
+            ret_dict: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[str], float]:
+        """
+        Base method to send a message to Claude via Bedrock with exponential backoff.
+
+        NOTE: For Bedrock, we get token counts directly from the API response,
+        so we don't need to use the Calculator's tokenizer.
+        """
+        self._print_debug_prompt(messages)
+
+        # Convert messages to Bedrock format
+        system_message, converted_messages = self._convert_messages(messages)
+
+        # Assemble the payload
+        params = {
+            "modelId": self.bedrock_model_id,
+            "messages": converted_messages,
+            "inferenceConfig": {
+                "maxTokens": 8192,
+                "temperature": 0.7
+            }
+        }
+
+        if system_message is not None:
+            params["system"] = [{"text": system_message}]
+
+        # Retry loop with exponential backoff for throttling
+        for attempt in range(1, self.maximum_timeout_attempts + 1):
+            try:
+                response = self.client.converse(**params)
+                response_text = response["output"]["message"]["content"][0]["text"]
+
+                self._print_debug_response(response_text)
+
+                # ⭐ Extract ACTUAL token usage from Bedrock response
+                usage = response.get("usage", {})
+                input_tokens = usage.get("inputTokens", 0)
+                output_tokens = usage.get("outputTokens", 0)
+
+                if self.debug:
+                    print(
+                        f"Bedrock token usage: {input_tokens} input + {output_tokens} output = {input_tokens + output_tokens} total")
+
+                # ⭐ Calculate cost using ACTUAL tokens (no approximation needed!)
+                # Get pricing from Calculator class pricing dictionaries
+                from LLM_utils.cost import Calculator
+                input_price = Calculator.Anthropic_input_pricing.get(self.model, 3.0)
+                output_price = Calculator.Anthropic_output_pricing.get(self.model, 15.0)
+
+                input_cost = input_tokens * input_price / 1e6
+                output_cost = output_tokens * output_price / 1e6
+                cost = input_cost + output_cost
+
+                if self.debug:
+                    print(f"Estimated cost: ${cost:.6f} (${input_cost:.6f} input + ${output_cost:.6f} output)")
+
+                if ret_dict is not None:
+                    ret_dict["result"] = (response_text, cost)
+
+                return response_text, cost
+
+            except ClientError as exc:
+                error_code = exc.response["Error"]["Code"]
+
+                if error_code != "ThrottlingException":
+                    # Non-throttling errors should be raised immediately
+                    print(f"Bedrock API error: {error_code}")
+                    raise
+
+                # Throttling - wait with exponential backoff
+                if attempt < self.maximum_timeout_attempts:
+                    sleep_for = min(
+                        1.0 * 2 ** (attempt - 1) + random.uniform(0, 0.5),
+                        20
+                    )
+                    print(
+                        f"Throttled, retrying in {sleep_for:.2f}s "
+                        f"(attempt {attempt}/{self.maximum_timeout_attempts})"
+                    )
+                    time.sleep(sleep_for)
+                else:
+                    raise RuntimeError(
+                        f"Exceeded {self.maximum_timeout_attempts} attempts "
+                        f"due to persistent throttling."
+                    )
+
+        return None, 0.0
+
+
 def extract_code_base(raw_sequence, language="python"):
+    """
+    Extract code from markdown code blocks.
+
+    Args:
+        raw_sequence (str): Raw text containing code blocks.
+        language (str, optional): Programming language identifier. Defaults to "python".
+
+    Returns:
+        str: Extracted code or original sequence if no code blocks found.
+    """
     try:
         sub1 = f"```{language}"
         idx1 = raw_sequence.index(sub1)
@@ -349,11 +622,22 @@ def extract_code_base(raw_sequence, language="python"):
         sub2,
         idx1 + 1,
     )
-    extraction = raw_sequence[idx1 + len(sub1) + 1 : idx2]
+    extraction = raw_sequence[idx1 + len(sub1) + 1: idx2]
     return extraction
 
 
 def extract_code(raw_sequence, language="python", mode="code"):
+    """
+    Extract code from markdown and optionally evaluate as Python object.
+
+    Args:
+        raw_sequence (str): Raw text containing code blocks.
+        language (str, optional): Programming language identifier. Defaults to "python".
+        mode (str, optional): "code" for raw code, "python_object" to evaluate. Defaults to "code".
+
+    Returns:
+        str or Any: Extracted code string, or evaluated Python object if mode="python_object".
+    """
     extraction = extract_code_base(raw_sequence, language)
     if mode == "code":
         return extraction
