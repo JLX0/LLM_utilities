@@ -3,20 +3,19 @@ from __future__ import annotations
 import ast
 import json
 import os
+import random
+import time
 import traceback
 from typing import Any
 from typing import Callable
 from typing import Optional
 
-from openai import OpenAI
-from openai.types.chat import ChatCompletion
-from openai.types.chat import ChatCompletionMessageParam
-
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
-import time
-import random
+from openai import OpenAI
+from openai.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletionMessageParam
 
 from LLM_utils.cost import Calculator
 from LLM_utils.fault_tolerance import retry_overtime_kill
@@ -65,7 +64,7 @@ def check_and_read_key_file(file_path: str, target_key: str) -> Any:
 
 
 def get_api_key(
-        base_path: str, target_key: str, default_key: str = "type_your_key_here_or_use_key.json"
+    base_path: str, target_key: str, default_key: str = "type_your_key_here_or_use_key.json"
 ) -> str:
     """
     Retrieve the API key from a file or use a default value.
@@ -109,13 +108,13 @@ class LLMBase:
     """
 
     def __init__(
-            self,
-            api_key: Optional[str],
-            model: str = "gpt-4-mini",
-            timeout: float = 60,
-            maximum_generation_attempts: int = 3,
-            maximum_timeout_attempts: int = 3,
-            debug: bool = False,
+        self,
+        api_key: Optional[str],
+        model: str = "gpt-4-mini",
+        timeout: float = 60,
+        maximum_generation_attempts: int = 3,
+        maximum_timeout_attempts: int = 3,
+        debug: bool = False,
     ) -> None:
         """
         Initialize the base LLM.
@@ -169,9 +168,9 @@ class LLMBase:
             print("---Response ending marker---")
 
     def ask_base(
-            self,
-            messages: list[ChatCompletionMessageParam],
-            ret_dict: Optional[dict[str, Any]] = None,
+        self,
+        messages: list[ChatCompletionMessageParam],
+        ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
         Base method to send a message to the LLM. Must be implemented by subclasses.
@@ -191,9 +190,9 @@ class LLMBase:
         raise NotImplementedError("Subclasses must implement ask_base()")
 
     def ask(
-            self,
-            messages: list[ChatCompletionMessageParam],
-            ret_dict: Optional[dict[str, any]] = None,
+        self,
+        messages: list[ChatCompletionMessageParam],
+        ret_dict: Optional[dict[str, any]] = None,
     ) -> tuple[Optional[str], float]:
         """
         Send a message to the LLM with retry functionality for handling timeouts.
@@ -229,9 +228,9 @@ class LLMBase:
             return "termination_signal", cost
 
     def ask_with_test(
-            self,
-            messages: list[ChatCompletionMessageParam],
-            tests: Callable[[str], str],
+        self,
+        messages: list[ChatCompletionMessageParam],
+        tests: Callable[[str], str],
     ) -> tuple[Any, float]:
         """
         Send a message with testing function and retry on test failures.
@@ -307,13 +306,13 @@ class OpenAI_interface(LLMBase):
     """
 
     def __init__(
-            self,
-            api_key: str,
-            model: str = "gpt-4-mini",
-            timeout: float = 60,
-            maximum_generation_attempts: int = 3,
-            maximum_timeout_attempts: int = 3,
-            debug: bool = False,
+        self,
+        api_key: str,
+        model: str = "gpt-4-mini",
+        timeout: float = 60,
+        maximum_generation_attempts: int = 3,
+        maximum_timeout_attempts: int = 3,
+        debug: bool = False,
     ) -> None:
         """
         Initialize the OpenAI client.
@@ -336,9 +335,9 @@ class OpenAI_interface(LLMBase):
             self.client = OpenAI(api_key=api_key)
 
     def ask_base(
-            self,
-            messages: list[ChatCompletionMessageParam],
-            ret_dict: Optional[dict[str, Any]] = None,
+        self,
+        messages: list[ChatCompletionMessageParam],
+        ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
         Base method to send a message to the chat model and capture the response.
@@ -401,7 +400,6 @@ class Anthropic_Bedrock_interface(LLMBase):
     MODEL_IDS = {
         # Map friendly names to INFERENCE PROFILE IDs (not direct model IDs)
         # Using "global." prefix for best availability (auto-routing across regions)
-
         # Haiku family
         "claude-haiku-3": "anthropic.claude-3-haiku-20240307-v1:0",  # Older model, direct ID works
         "claude-3-haiku": "anthropic.claude-3-haiku-20240307-v1:0",
@@ -409,7 +407,6 @@ class Anthropic_Bedrock_interface(LLMBase):
         "claude-3-5-haiku": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
         "claude-haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "claude-4-5-haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-
         # Sonnet family - ALL require inference profiles
         "claude-sonnet-3.5": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         "claude-3-5-sonnet": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -419,7 +416,6 @@ class Anthropic_Bedrock_interface(LLMBase):
         "claude-4-sonnet": "global.anthropic.claude-sonnet-4-20250514-v1:0",
         "claude-sonnet-4.5": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "claude-4-5-sonnet": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-
         # Opus family
         "claude-opus-3": "anthropic.claude-3-opus-20240229-v1:0",  # Older model, direct ID works
         "claude-3-opus": "anthropic.claude-3-opus-20240229-v1:0",
@@ -428,14 +424,14 @@ class Anthropic_Bedrock_interface(LLMBase):
     }
 
     def __init__(
-            self,
-            api_key: Optional[str] = None,  # Not used for Bedrock, but kept for compatibility
-            model: str = "claude-sonnet-4.5",
-            region_name: str = "us-east-1",
-            timeout: float = 300,
-            maximum_generation_attempts: int = 3,
-            maximum_timeout_attempts: int = 10,
-            debug: bool = False,
+        self,
+        api_key: Optional[str] = None,  # Not used for Bedrock, but kept for compatibility
+        model: str = "claude-sonnet-4.5",
+        region_name: str = "us-east-1",
+        timeout: float = 300,
+        maximum_generation_attempts: int = 3,
+        maximum_timeout_attempts: int = 10,
+        debug: bool = False,
     ) -> None:
         """
         Initialize the Anthropic Bedrock client.
@@ -450,8 +446,7 @@ class Anthropic_Bedrock_interface(LLMBase):
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
         """
         super().__init__(
-            api_key, model, timeout, maximum_generation_attempts,
-            maximum_timeout_attempts, debug
+            api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
         )
 
         self.region_name = region_name
@@ -460,23 +455,16 @@ class Anthropic_Bedrock_interface(LLMBase):
         sdk_config = Config(
             connect_timeout=5,
             read_timeout=int(timeout),
-            retries={
-                "total_max_attempts": 8,
-                "mode": "adaptive"  # Client-side rate-limiting
-            }
+            retries={"total_max_attempts": 8, "mode": "adaptive"},  # Client-side rate-limiting
         )
 
-        self.client = boto3.client(
-            "bedrock-runtime",
-            region_name=region_name,
-            config=sdk_config
-        )
+        self.client = boto3.client("bedrock-runtime", region_name=region_name, config=sdk_config)
 
         # Get the full Bedrock model ID
         self.bedrock_model_id = self.MODEL_IDS.get(model, model)
 
     def _convert_messages(
-            self, messages: list[ChatCompletionMessageParam]
+        self, messages: list[ChatCompletionMessageParam]
     ) -> tuple[Optional[str], list[dict]]:
         """
         Convert OpenAI-style messages to Bedrock format.
@@ -494,43 +482,34 @@ class Anthropic_Bedrock_interface(LLMBase):
             if m["role"] == "system":
                 system_message = m["content"]
                 continue
-            converted_messages.append({
-                "role": m["role"],
-                "content": [{"text": m["content"]}]
-            })
+            converted_messages.append({"role": m["role"], "content": [{"text": m["content"]}]})
 
         return system_message, converted_messages
 
     def ask_base(
-            self,
-            messages: list[ChatCompletionMessageParam],
-            ret_dict: Optional[dict[str, Any]] = None,
+        self,
+        messages: list[ChatCompletionMessageParam],
+        ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
-        Base method to send a message to Claude via Bedrock with exponential backoff.
+        Base method to send a message to Claude via Bedrock.
 
-        NOTE: For Bedrock, we get token counts directly from the API response,
-        so we don't need to use the Calculator's tokenizer.
+        NOTE: We calculate cost directly from Bedrock's response usage data.
+        We do NOT use the Calculator class for Bedrock.
         """
         self._print_debug_prompt(messages)
 
-        # Convert messages to Bedrock format
         system_message, converted_messages = self._convert_messages(messages)
 
-        # Assemble the payload
         params = {
             "modelId": self.bedrock_model_id,
             "messages": converted_messages,
-            "inferenceConfig": {
-                "maxTokens": 8192,
-                "temperature": 0.7
-            }
+            "inferenceConfig": {"maxTokens": 8192, "temperature": 0.7},
         }
 
         if system_message is not None:
             params["system"] = [{"text": system_message}]
 
-        # Retry loop with exponential backoff for throttling
         for attempt in range(1, self.maximum_timeout_attempts + 1):
             try:
                 response = self.client.converse(**params)
@@ -538,27 +517,24 @@ class Anthropic_Bedrock_interface(LLMBase):
 
                 self._print_debug_response(response_text)
 
-                # ⭐ Extract ACTUAL token usage from Bedrock response
+                # Get ACTUAL token usage from Bedrock (no estimation needed)
                 usage = response.get("usage", {})
                 input_tokens = usage.get("inputTokens", 0)
                 output_tokens = usage.get("outputTokens", 0)
 
                 if self.debug:
                     print(
-                        f"Bedrock token usage: {input_tokens} input + {output_tokens} output = {input_tokens + output_tokens} total")
+                        f"Bedrock tokens: {input_tokens} in + {output_tokens} out = {input_tokens + output_tokens} total"
+                    )
 
-                # ⭐ Calculate cost using ACTUAL tokens (no approximation needed!)
-                # Get pricing from Calculator class pricing dictionaries
-                from LLM_utils.cost import Calculator
+                # Calculate cost directly using pricing from Calculator class
                 input_price = Calculator.Anthropic_input_pricing.get(self.model, 3.0)
                 output_price = Calculator.Anthropic_output_pricing.get(self.model, 15.0)
 
-                input_cost = input_tokens * input_price / 1e6
-                output_cost = output_tokens * output_price / 1e6
-                cost = input_cost + output_cost
+                cost = (input_tokens * input_price + output_tokens * output_price) / 1e6
 
                 if self.debug:
-                    print(f"Estimated cost: ${cost:.6f} (${input_cost:.6f} input + ${output_cost:.6f} output)")
+                    print(f"Cost: ${cost:.6f}")
 
                 if ret_dict is not None:
                     ret_dict["result"] = (response_text, cost)
@@ -569,25 +545,18 @@ class Anthropic_Bedrock_interface(LLMBase):
                 error_code = exc.response["Error"]["Code"]
 
                 if error_code != "ThrottlingException":
-                    # Non-throttling errors should be raised immediately
                     print(f"Bedrock API error: {error_code}")
                     raise
 
-                # Throttling - wait with exponential backoff
                 if attempt < self.maximum_timeout_attempts:
-                    sleep_for = min(
-                        1.0 * 2 ** (attempt - 1) + random.uniform(0, 0.5),
-                        20
-                    )
+                    sleep_for = min(1.0 * 2 ** (attempt - 1) + random.uniform(0, 0.5), 20)
                     print(
-                        f"Throttled, retrying in {sleep_for:.2f}s "
-                        f"(attempt {attempt}/{self.maximum_timeout_attempts})"
+                        f"Throttled, retrying in {sleep_for:.2f}s (attempt {attempt}/{self.maximum_timeout_attempts})"
                     )
                     time.sleep(sleep_for)
                 else:
                     raise RuntimeError(
-                        f"Exceeded {self.maximum_timeout_attempts} attempts "
-                        f"due to persistent throttling."
+                        f"Exceeded {self.maximum_timeout_attempts} attempts due to persistent throttling."
                     )
 
         return None, 0.0
@@ -622,7 +591,7 @@ def extract_code_base(raw_sequence, language="python"):
         sub2,
         idx1 + 1,
     )
-    extraction = raw_sequence[idx1 + len(sub1) + 1: idx2]
+    extraction = raw_sequence[idx1 + len(sub1) + 1 : idx2]
     return extraction
 
 

@@ -1,5 +1,6 @@
 import os
 
+from anthropic import Anthropic
 import tiktoken
 import transformers
 
@@ -60,7 +61,6 @@ class Calculator:
         "claude-3-5-haiku": 0.80,
         "claude-haiku-4.5": 1.00,
         "claude-4-5-haiku": 1.00,
-
         # Sonnet family
         "claude-sonnet-3.5": 3.00,
         "claude-3-5-sonnet": 3.00,
@@ -71,11 +71,9 @@ class Calculator:
         "claude-sonnet-4.5": 3.00,
         "claude-4-5-sonnet": 3.00,
         "claude-sonnet-4-20250514": 3.00,
-
         # Sonnet 4.1 (with thinking tokens)
         "claude-sonnet-4.1": 5.00,
         "claude-4-1-sonnet": 5.00,
-
         # Opus family
         "claude-opus-4": 15.00,
         "claude-4-opus": 15.00,
@@ -92,7 +90,6 @@ class Calculator:
         "claude-3-5-haiku": 4.00,
         "claude-haiku-4.5": 5.00,
         "claude-4-5-haiku": 5.00,
-
         # Sonnet family
         "claude-sonnet-3.5": 15.00,
         "claude-3-5-sonnet": 15.00,
@@ -103,11 +100,9 @@ class Calculator:
         "claude-sonnet-4.5": 15.00,
         "claude-4-5-sonnet": 15.00,
         "claude-sonnet-4-20250514": 15.00,
-
         # Sonnet 4.1 (with thinking tokens)
         "claude-sonnet-4.1": 25.00,
         "claude-4-1-sonnet": 25.00,
-
         # Opus family
         "claude-opus-4": 75.00,
         "claude-4-opus": 75.00,
@@ -208,80 +203,51 @@ class Calculator:
     def calculate_cost_DeepSeek(self):
         self.calculate_token_length_DeepSeek()
         cost = (
-                self.input_token_length * self.DeepSeek_input_pricing[self.model]
-                + self.output_token_length * self.DeepSeek_output_pricing[self.model]
+            self.input_token_length * self.DeepSeek_input_pricing[self.model]
+            + self.output_token_length * self.DeepSeek_output_pricing[self.model]
         )
         cost /= 1e6
         return cost
 
     def calculate_token_length_Anthropic(self):
         """
-        Calculate token lengths using the official Anthropic tokenizer.
+        Calculate token lengths using the official Anthropic API tokenizer.
 
-        NOTE: This requires Anthropic API access and won't work for Bedrock users.
-        Bedrock users should get token counts from actual API responses instead.
+        IMPORTANT: This method requires ANTHROPIC_API_KEY and only works with
+        Anthropic's direct API, NOT with AWS Bedrock.
+
+        Bedrock users: Don't use Calculator for tokenization. Get token counts
+        from the API response directly.
         """
-        try:
-            from anthropic import Anthropic
+        # Initialize Anthropic client (will raise error if no API key)
+        client = Anthropic()
 
-            # Try to initialize client
-            # This will fail for Bedrock users (no ANTHROPIC_API_KEY)
-            try:
-                client = Anthropic()
-            except Exception as auth_error:
-                # If authentication fails, user is likely using Bedrock
-                if "authentication" in str(auth_error).lower() or "api_key" in str(auth_error).lower():
-                    if self.debug:
-                        print("Note: Anthropic API key not configured (expected for Bedrock users)")
-                        print("Bedrock users: token counts come from API responses, not pre-counting")
-                    # Return without setting token lengths - they'll come from API response
-                    return
+        if self.formatted_input_sequence is not None:
+            # Convert OpenAI format to Anthropic format
+            messages = []
+            system_message = None
+
+            for msg in self.formatted_input_sequence:
+                if msg["role"] == "system":
+                    system_message = msg["content"]
                 else:
-                    raise
+                    messages.append({"role": msg["role"], "content": msg["content"]})
 
-            if self.formatted_input_sequence is not None:
-                # Convert OpenAI format to Anthropic format
-                messages = []
-                system_message = None
+            # Count input tokens using Anthropic's official method
+            count_params = {"model": self.model, "messages": messages}
+            if system_message:
+                count_params["system"] = system_message
 
-                for msg in self.formatted_input_sequence:
-                    if msg["role"] == "system":
-                        system_message = msg["content"]
-                    else:
-                        messages.append({
-                            "role": msg["role"],
-                            "content": msg["content"]
-                        })
+            response = client.messages.count_tokens(**count_params)
+            self.input_token_length = response.input_tokens
 
-                # Count input tokens using Anthropic's official method
-                count_params = {
-                    "model": self.model,
-                    "messages": messages
-                }
-                if system_message:
-                    count_params["system"] = system_message
-
-                response = client.messages.count_tokens(**count_params)
-                self.input_token_length = response.input_tokens
-
-            if self.output_sequence_string is not None:
-                # For output tokens, count them as a message
-                output_response = client.messages.count_tokens(
-                    model=self.model,
-                    messages=[{
-                        "role": "assistant",
-                        "content": self.output_sequence_string
-                    }]
-                )
-                self.output_token_length = output_response.input_tokens
-
-        except Exception as e:
-            if self.debug:
-                print(f"Could not use Anthropic tokenizer: {e}")
-                print("This is normal for Bedrock users - tokens come from API responses")
-            # For Bedrock users, don't fall back to tiktoken
-            # Token counts will come from actual API responses
-            pass
+        if self.output_sequence_string is not None:
+            # For output tokens, count them as a message
+            output_response = client.messages.count_tokens(
+                model=self.model,
+                messages=[{"role": "assistant", "content": self.output_sequence_string}],
+            )
+            self.output_token_length = output_response.input_tokens
 
     def calculate_cost_Anthropic(self):
         """
@@ -293,8 +259,12 @@ class Calculator:
         """
         self.calculate_token_length_Anthropic()
 
-        input_cost = self.input_token_length * self.Anthropic_input_pricing.get(self.model, 3.0) / 1e6
-        output_cost = self.output_token_length * self.Anthropic_output_pricing.get(self.model, 15.0) / 1e6
+        input_cost = (
+            self.input_token_length * self.Anthropic_input_pricing.get(self.model, 3.0) / 1e6
+        )
+        output_cost = (
+            self.output_token_length * self.Anthropic_output_pricing.get(self.model, 15.0) / 1e6
+        )
 
         # Note: This does NOT include thinking tokens for Claude 4.1 models
         # Those would need to be tracked separately from the actual API response
@@ -314,14 +284,25 @@ class Calculator:
         elif self.model in self.DeepSeek_input_pricing:
             self.calculate_token_length_DeepSeek()
         elif self.model in self.Anthropic_input_pricing:
-            self.calculate_token_length_Anthropic()
+            # For Anthropic models: check if we have API access
+            # If ANTHROPIC_API_KEY is not set, use GPT tokenizer for approximation
+            # (This is only for length limiting; actual costs come from API responses)
+            import os
+
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                # Direct Anthropic API - use their tokenizer
+                self.calculate_token_length_Anthropic()
+            else:
+                # Bedrock or no API key - use GPT tokenizer for approximation
+                # This is ONLY for length_limiter truncation, NOT for billing
+                self.input_token_length = self.calculate_input_token_length_GPT()
         else:
             raise ValueError(f"Model {self.model} not supported for token length calculation.")
 
         return self.input_token_length
 
     def length_limiter(
-            self, input_sequence, limit, truncation=True, include_truncation_warning=True
+        self, input_sequence, limit, truncation=True, include_truncation_warning=True
     ):
         self.calculate_input_token_length(input_sequence, form="list")
 
