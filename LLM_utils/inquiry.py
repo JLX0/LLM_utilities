@@ -384,16 +384,26 @@ class Anthropic_Bedrock_interface(LLMBase):
 
     Provides methods to communicate with Anthropic models through AWS Bedrock API,
     with built-in retry functionality for handling throttling and timeouts.
+    Supports Extended Thinking mode for complex reasoning tasks.
 
     Attributes:
         client: The Bedrock runtime client.
         bedrock_model_id (str): The full Bedrock model identifier.
         region_name (str): AWS region for Bedrock.
+        enable_thinking (bool): Whether extended thinking is enabled.
+        thinking_budget_tokens (int): Token budget for thinking (>= 1024).
+        max_tokens (int): Maximum output tokens.
+        temperature (float): Temperature (not used when thinking is enabled).
 
     Example:
-        >>> claude = Anthropic_Bedrock_interface(model="claude-sonnet-4")
-        >>> messages = [{"role": "user", "content": "Hello!"}]
-        >>> response, cost = claude.ask(messages)
+        >>> # Without thinking
+        >>> claude = Anthropic_Bedrock_interface(model="claude-sonnet-4.5")
+        >>> # With thinking enabled
+        >>> claude_thinking = Anthropic_Bedrock_interface(
+        ...     model="claude-sonnet-4.5",
+        ...     thinking_budget_tokens=4000,
+        ...     max_tokens=12000
+        ... )
     """
 
     # Model ID mapping - ALL models now use inference profiles for Bedrock compatibility
@@ -401,9 +411,9 @@ class Anthropic_Bedrock_interface(LLMBase):
         # Map friendly names to INFERENCE PROFILE IDs (not direct model IDs)
         # Using "global." prefix for best availability (auto-routing across regions)
         # Haiku family
-        "claude-haiku-3": "anthropic.claude-3-haiku-20240307-v1:0",  # Older model, direct ID works
+        "claude-haiku-3": "anthropic.claude-3-haiku-20240307-v1:0",
         "claude-3-haiku": "anthropic.claude-3-haiku-20240307-v1:0",
-        "claude-haiku-3.5": "us.anthropic.claude-3-5-haiku-20241022-v1:0",  # Newer, needs profile
+        "claude-haiku-3.5": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
         "claude-3-5-haiku": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
         "claude-haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "claude-4-5-haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -417,7 +427,7 @@ class Anthropic_Bedrock_interface(LLMBase):
         "claude-sonnet-4.5": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "claude-4-5-sonnet": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # Opus family
-        "claude-opus-3": "anthropic.claude-3-opus-20240229-v1:0",  # Older model, direct ID works
+        "claude-opus-3": "anthropic.claude-3-opus-20240229-v1:0",
         "claude-3-opus": "anthropic.claude-3-opus-20240229-v1:0",
         "claude-opus-4": "us.anthropic.claude-opus-4-20250514-v1:0",
         "claude-4-opus": "us.anthropic.claude-opus-4-20250514-v1:0",
@@ -425,25 +435,35 @@ class Anthropic_Bedrock_interface(LLMBase):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,  # Not used for Bedrock, but kept for compatibility
+        api_key: Optional[str] = None,
         model: str = "claude-sonnet-4.5",
         region_name: str = "us-east-1",
         timeout: float = 300,
         maximum_generation_attempts: int = 3,
         maximum_timeout_attempts: int = 10,
         debug: bool = False,
+        *,
+        enable_thinking: bool = False,
+        thinking_budget_tokens: int = 0,
+        max_tokens: int = 8192,
+        temperature: float = 0.7,
     ) -> None:
         """
-        Initialize the Anthropic Bedrock client.
+        Initialize the Anthropic Bedrock client with optional Extended Thinking.
 
         Args:
-            api_key (Optional[str]): Not used (Bedrock uses AWS credentials), kept for compatibility.
-            model (str, optional): Model name (will be mapped to Bedrock ID). Defaults to 'claude-sonnet-4'.
-            region_name (str, optional): AWS region for Bedrock. Defaults to 'us-east-1'.
-            timeout (float, optional): Maximum time limit for API calls. Defaults to 300.
-            maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
-            maximum_timeout_attempts (int, optional): Max retry attempts for throttling. Defaults to 10.
-            debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
+            api_key (Optional[str]): Not used (Bedrock uses AWS credentials).
+            model (str, optional): Model name. Defaults to 'claude-sonnet-4.5'.
+            region_name (str, optional): AWS region. Defaults to 'us-east-1'.
+            timeout (float, optional): Max time for API calls. Defaults to 300.
+            maximum_generation_attempts (int, optional): Max attempts. Defaults to 3.
+            maximum_timeout_attempts (int, optional): Max retries. Defaults to 10.
+            debug (bool, optional): Enable debug logging. Defaults to False.
+            enable_thinking (bool, optional): Enable extended thinking. Defaults to False.
+            thinking_budget_tokens (int, optional): Thinking token budget (>= 1024).
+                Defaults to 0 (disabled).
+            max_tokens (int, optional): Max output tokens. Defaults to 8192.
+            temperature (float, optional): Temperature (unused with thinking). Defaults to 0.7.
         """
         super().__init__(
             api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
@@ -451,17 +471,19 @@ class Anthropic_Bedrock_interface(LLMBase):
 
         self.region_name = region_name
 
-        # SDK-level retry configuration with adaptive throttling
         sdk_config = Config(
             connect_timeout=5,
             read_timeout=int(timeout),
-            retries={"total_max_attempts": 8, "mode": "adaptive"},  # Client-side rate-limiting
+            retries={"total_max_attempts": 8, "mode": "adaptive"},
         )
-
         self.client = boto3.client("bedrock-runtime", region_name=region_name, config=sdk_config)
 
-        # Get the full Bedrock model ID
         self.bedrock_model_id = self.MODEL_IDS.get(model, model)
+
+        self.enable_thinking = enable_thinking or (thinking_budget_tokens >= 1024)
+        self.thinking_budget_tokens = thinking_budget_tokens
+        self.max_tokens = max_tokens
+        self.temperature = temperature
 
     def _convert_messages(
         self, messages: list[ChatCompletionMessageParam]
@@ -492,45 +514,79 @@ class Anthropic_Bedrock_interface(LLMBase):
         ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
-        Base method to send a message to Claude via Bedrock.
+        Base method to send a message to Claude via Bedrock with optional Extended Thinking.
 
         NOTE: We calculate cost directly from Bedrock's response usage data.
-        We do NOT use the Calculator class for Bedrock.
+        We do NOT use the Calculator class for Bedrock token counting.
         """
         self._print_debug_prompt(messages)
 
         system_message, converted_messages = self._convert_messages(messages)
 
-        params = {
+        inf_cfg: dict[str, Any] = {"maxTokens": int(self.max_tokens)}
+
+        addl_fields: Optional[dict] = None
+        if self.enable_thinking:
+            budget = max(1024, int(self.thinking_budget_tokens))
+            if budget >= inf_cfg["maxTokens"]:
+                inf_cfg["maxTokens"] = budget + 2048
+            addl_fields = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+
+            if self.debug:
+                print(
+                    f"Extended thinking enabled: budget={budget}, max_tokens={inf_cfg['maxTokens']}"
+                )
+        else:
+            inf_cfg["temperature"] = float(self.temperature)
+
+        params: dict[str, Any] = {
             "modelId": self.bedrock_model_id,
             "messages": converted_messages,
-            "inferenceConfig": {"maxTokens": 8192, "temperature": 0.7},
+            "inferenceConfig": inf_cfg,
         }
 
         if system_message is not None:
             params["system"] = [{"text": system_message}]
 
+        if addl_fields is not None:
+            params["additionalModelRequestFields"] = addl_fields
+
         for attempt in range(1, self.maximum_timeout_attempts + 1):
             try:
                 response = self.client.converse(**params)
-                response_text = response["output"]["message"]["content"][0]["text"]
+
+                blocks = response.get("output", {}).get("message", {}).get("content", []) or []
+                texts: list[str] = []
+                thinking_texts: list[str] = []
+
+                for b in blocks:
+                    if isinstance(b, dict):
+                        if "text" in b and isinstance(b["text"], str):
+                            texts.append(b["text"])
+                        elif "thinking" in b and isinstance(b["thinking"], str):
+                            thinking_texts.append(b["thinking"])
+
+                response_text = "\n".join(texts).strip() if texts else ""
+
+                if self.debug and thinking_texts:
+                    print(f"--- Thinking content ({len(thinking_texts)} blocks) ---")
+                    for i, think in enumerate(thinking_texts, 1):
+                        print(f"Thinking block {i}: {think[:200]}...")
 
                 self._print_debug_response(response_text)
 
-                # Get ACTUAL token usage from Bedrock (no estimation needed)
-                usage = response.get("usage", {})
-                input_tokens = usage.get("inputTokens", 0)
-                output_tokens = usage.get("outputTokens", 0)
+                usage = response.get("usage", {}) or {}
+                input_tokens = int(usage.get("inputTokens", 0))
+                output_tokens = int(usage.get("outputTokens", 0))
 
                 if self.debug:
                     print(
-                        f"Bedrock tokens: {input_tokens} in + {output_tokens} out = {input_tokens + output_tokens} total"
+                        f"Bedrock tokens: {input_tokens} in + {output_tokens} out = "
+                        f"{input_tokens + output_tokens} total"
                     )
 
-                # Calculate cost directly using pricing from Calculator class
                 input_price = Calculator.Anthropic_input_pricing.get(self.model, 3.0)
                 output_price = Calculator.Anthropic_output_pricing.get(self.model, 15.0)
-
                 cost = (input_tokens * input_price + output_tokens * output_price) / 1e6
 
                 if self.debug:
@@ -551,12 +607,13 @@ class Anthropic_Bedrock_interface(LLMBase):
                 if attempt < self.maximum_timeout_attempts:
                     sleep_for = min(1.0 * 2 ** (attempt - 1) + random.uniform(0, 0.5), 20)
                     print(
-                        f"Throttled, retrying in {sleep_for:.2f}s (attempt {attempt}/{self.maximum_timeout_attempts})"
+                        f"Throttled, retrying in {sleep_for:.2f}s "
+                        f"(attempt {attempt}/{self.maximum_timeout_attempts})"
                     )
                     time.sleep(sleep_for)
                 else:
                     raise RuntimeError(
-                        f"Exceeded {self.maximum_timeout_attempts} attempts due to persistent throttling."
+                        f"Exceeded {self.maximum_timeout_attempts} attempts due to throttling."
                     )
 
         return None, 0.0
