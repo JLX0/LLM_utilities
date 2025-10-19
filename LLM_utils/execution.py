@@ -2,16 +2,24 @@ import os
 import subprocess
 import sys
 import threading
+from typing import Any
+from typing import Dict
 from typing import List
+from typing import Optional
 
 
-def execute_bash(command: str, print_progress: bool = False) -> (int, str):
+def execute_bash(
+    command: str, print_progress: bool = False, output_dict: Optional[Dict[str, Any]] = None
+) -> tuple[int, str]:
     """
     Executes a bash command and returns the return code and combined output.
 
     Args:
         command (str): The bash command to execute.
         print_progress (bool): If True, prints output in real-time.
+        output_dict (Optional[Dict[str, Any]]): If provided, streams output to this dict
+            under the key 'partial_output' as execution progresses. Useful for capturing
+            partial output when the process might be terminated externally.
 
     Returns:
         returncode (int): The return code of the process.
@@ -38,6 +46,11 @@ def execute_bash(command: str, print_progress: bool = False) -> (int, str):
     def handle_output(stream, is_stderr: bool = False):
         for line in iter(stream.readline, ""):  # Read line by line
             output_lines.append(line)  # Capture the line
+
+            # Update the output_dict with partial output if provided
+            if output_dict is not None:
+                output_dict["partial_output"] = "".join(output_lines)
+
             if print_progress:
                 # Print to the appropriate stream (stdout or stderr)
                 print(line, end="", file=sys.stderr if is_stderr else sys.stdout)
@@ -60,5 +73,9 @@ def execute_bash(command: str, print_progress: bool = False) -> (int, str):
 
     # Combine all output lines into a single string
     output = "".join(output_lines)
+
+    # Final update to output_dict
+    if output_dict is not None:
+        output_dict["partial_output"] = output
 
     return process.returncode, output
