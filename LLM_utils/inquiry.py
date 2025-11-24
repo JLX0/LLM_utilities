@@ -309,6 +309,7 @@ class OpenAI_interface(LLMBase):
         self,
         api_key: str,
         model: str = "gpt-4-mini",
+        base_url: Optional[str] = None,
         timeout: float = 60,
         maximum_generation_attempts: int = 3,
         maximum_timeout_attempts: int = 3,
@@ -320,6 +321,7 @@ class OpenAI_interface(LLMBase):
         Args:
             api_key (str): The OpenAI API key for authentication.
             model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
+            base_url (Optional[str], optional): Custom base URL for API endpoint. Defaults to None.
             timeout (float, optional): Maximum time limit for API calls. Defaults to 60.
             maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
             maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 3.
@@ -329,7 +331,11 @@ class OpenAI_interface(LLMBase):
             api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
         )
 
-        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
+        self.base_url = base_url
+
+        if base_url:
+            self.client = OpenAI(api_key=api_key, base_url=base_url)
+        elif self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
             self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
         else:
             self.client = OpenAI(api_key=api_key)
@@ -364,11 +370,18 @@ class OpenAI_interface(LLMBase):
         response_text: str = response.choices[0].message.content
         self._print_debug_response(response_text)
 
-        # Calculate cost
+        # Calculate cost - handle custom base_url case
         calculator_instance = Calculator(self.model, messages, response_text)
 
         if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
             cost = calculator_instance.calculate_cost_DeepSeek()
+        elif self.base_url:
+            # For custom endpoints (like Sakana), estimate cost using GPT pricing as fallback
+            try:
+                cost = calculator_instance.calculate_cost_GPT()
+            except (KeyError, ValueError):
+                # If model not in pricing dict, estimate based on token count
+                cost = 0.0  # Custom endpoints may have different pricing
         else:
             cost = calculator_instance.calculate_cost_GPT()
 
