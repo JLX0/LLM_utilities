@@ -1,24 +1,141 @@
+"""
+LiteLLM-based LLM interface for unified API access across multiple providers.
+
+Supported models:
+- claude-sonnet-4.5 (via OpenRouter)
+- gpt-5.2 (via OpenRouter)
+- gemini-pro-3.0 (direct via LiteLLM)
+- deepseek-v3.2 (via OpenRouter, both reasoning and non-reasoning modes)
+"""
+
 from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
-import random
-import time
-import traceback
+import warnings
 from typing import Any
 from typing import Callable
 from typing import Optional
 
-import boto3
-from botocore.config import Config
-from botocore.exceptions import ClientError
-from openai import OpenAI
-from openai.types.chat import ChatCompletion
-from openai.types.chat import ChatCompletionMessageParam
+import litellm
+from litellm import completion
 
 from LLM_utils.cost import Calculator
 from LLM_utils.fault_tolerance import retry_overtime_kill
+
+
+# Configure logging
+logger = logging.getLogger("LiteLLM")
+logger.setLevel(logging.WARNING)
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
+litellm.success_callback = []
+litellm.failure_callback = []
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*is bound to a different event loop.*",
+    category=RuntimeWarning,
+)
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+
+# Supported model aliases and their LiteLLM model identifiers
+MODEL_ALIASES: dict[str, str] = {
+    # Claude models (via OpenRouter)
+    "claude-sonnet-4.5": "openrouter/anthropic/claude-sonnet-4.5",
+    "claude-4-5-sonnet": "openrouter/anthropic/claude-sonnet-4.5",
+    "claude-sonnet-4-5": "openrouter/anthropic/claude-sonnet-4.5",
+    # GPT models (via OpenRouter)
+    "gpt-5.2": "openrouter/openai/gpt-5.2",
+    "gpt-5": "openrouter/openai/gpt-5.2",
+    # Gemini models (direct via LiteLLM)
+    "gemini-pro-3.0": "gemini/gemini-3-pro-preview",
+    "gemini-3-pro": "gemini/gemini-3-pro-preview",
+    "gemini-pro-3": "gemini/gemini-3-pro-preview",
+    # DeepSeek v3.2 (via OpenRouter)
+    "deepseek-v3.2": "openrouter/deepseek/deepseek-v3.2",
+    "deepseek-3.2": "openrouter/deepseek/deepseek-v3.2",
+    "deepseek": "openrouter/deepseek/deepseek-v3.2",
+}
+
+# Valid reasoning effort levels
+VALID_EFFORTS = ("low", "medium", "high")
+
+# Reasoning effort to token budget mapping for providers that need it
+EFFORT_TO_TOKENS: dict[str, dict[str, int]] = {
+    "anthropic": {
+        "low": 1024,
+        "medium": 8192,
+        "high": 30000,
+    },
+    "deepseek": {
+        "low": 1024,
+        "medium": 8192,
+        "high": 30000,
+    },
+}
+
+
+def _setup_openrouter_env() -> None:
+    """Set up OpenRouter environment variables if not already configured."""
+    if "OPENROUTER_API_BASE" not in os.environ:
+        os.environ["OPENROUTER_API_BASE"] = "https://openrouter.ai/api/v1"
+
+    if "OPENROUTER_API_KEY" not in os.environ:
+        warnings.warn(
+            "OPENROUTER_API_KEY environment variable is not set. OpenRouter queries will fail.",
+            UserWarning,
+        )
+
+
+_setup_openrouter_env()
+
+
+def _resolve_model_name(model: str) -> str:
+    """Resolve a model alias to its full LiteLLM model identifier."""
+    return MODEL_ALIASES.get(model, model)
+
+
+def _is_openrouter_model(model_name: str) -> bool:
+    """Check if model uses OpenRouter."""
+    return (model_name or "").lower().startswith("openrouter/")
+
+
+def _is_gemini_direct_model(model_name: str) -> bool:
+    """Check if model uses direct Gemini API (not OpenRouter)."""
+    return (model_name or "").lower().startswith("gemini/")
+
+
+def _is_openai_model(model_name: str) -> bool:
+    """Check if model is an OpenAI model (for max_completion_tokens handling)."""
+    lower = model_name.lower()
+    return "gpt-5" in lower or "openai/gpt" in lower
+
+
+def _parse_openrouter_provider(model_name: str) -> str | None:
+    """Parse the OpenRouter provider from: openrouter/<provider>/<model-id>"""
+    name = (model_name or "").strip()
+    if not name.lower().startswith("openrouter/"):
+        return None
+    parts = name.split("/", 2)
+    if len(parts) < 3:
+        return None
+    return parts[1].lower()
+
+
+def _get_token_budget(provider: str, effort: str) -> int | None:
+    """Get token budget for a provider and effort level."""
+    provider_map = EFFORT_TO_TOKENS.get(provider)
+    if provider_map is None:
+        return None
+    return provider_map.get(effort)
 
 
 def check_and_read_key_file(file_path: str, target_key: str) -> Any:
@@ -86,6 +203,11 @@ def get_api_key(
     return default_key if key == -1 else key
 
 
+def get_supported_models() -> list[str]:
+    """Return a list of supported model names/aliases."""
+    return list(MODEL_ALIASES.keys())
+
+
 class LLMBase:
     """
     Base class for all LLMs with shared functionality.
@@ -100,32 +222,38 @@ class LLMBase:
         maximum_generation_attempts (int): Max attempts for generation with tests.
         maximum_timeout_attempts (int): Max retry attempts for timeouts/throttling.
         debug (bool): Flag indicating if debug mode is enabled.
+        max_tokens (int): Maximum tokens for completion.
+        reasoning_effort (Optional[str]): Reasoning effort level ("low", "medium", "high").
 
     Example:
-        >>> base_llm = LLMBase(api_key="your-key", model="gpt-4", debug=True)
+        >>> base_llm = LLMBase(api_key="your-key", model="claude-sonnet-4.5", debug=True)
         >>> print(base_llm.model)
-        'gpt-4'
+        'claude-sonnet-4.5'
     """
 
     def __init__(
         self,
         api_key: Optional[str],
-        model: str = "gpt-4-mini",
+        model: str = "claude-sonnet-4.5",
         timeout: float = 60,
         maximum_generation_attempts: int = 3,
         maximum_timeout_attempts: int = 3,
         debug: bool = False,
+        max_tokens: int = 8192,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         """
         Initialize the base LLM.
 
         Args:
             api_key (Optional[str]): The API key for authentication.
-            model (str, optional): The LLM model identifier to use. Defaults to 'gpt-4-mini'.
+            model (str, optional): The LLM model identifier to use. Defaults to 'claude-sonnet-4.5'.
             timeout (float, optional): Maximum time limit for API calls. Defaults to 60.
             maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
             maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 3.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
+            max_tokens (int, optional): Maximum tokens for completion. Defaults to 8192.
+            reasoning_effort (Optional[str], optional): Reasoning effort level. Defaults to None.
         """
         self.api_key = api_key
         self.model = model
@@ -133,14 +261,16 @@ class LLMBase:
         self.maximum_generation_attempts = maximum_generation_attempts
         self.maximum_timeout_attempts = maximum_timeout_attempts
         self.debug = debug
+        self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
 
     @staticmethod
-    def print_prompt(messages: list[ChatCompletionMessageParam]) -> None:
+    def print_prompt(messages: list[dict[str, str]]) -> None:
         """
         Print each segment of a message prompt.
 
         Args:
-            messages (list[ChatCompletionMessageParam]): List of message segments to print.
+            messages (list[dict[str, str]]): List of message segments to print.
 
         Example:
             >>> messages = [
@@ -150,10 +280,10 @@ class LLMBase:
             >>> LLMBase.print_prompt(messages)
         """
         for message in messages:
-            if isinstance(message["content"], str):
+            if isinstance(message.get("content"), str):
                 print(message["content"])
 
-    def _print_debug_prompt(self, messages: list[ChatCompletionMessageParam]) -> None:
+    def _print_debug_prompt(self, messages: list[dict[str, str]]) -> None:
         """Print prompt if debug mode is enabled."""
         if self.debug:
             print("---Prompt beginning marker---")
@@ -169,14 +299,14 @@ class LLMBase:
 
     def ask_base(
         self,
-        messages: list[ChatCompletionMessageParam],
+        messages: list[dict[str, str]],
         ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
         Base method to send a message to the LLM. Must be implemented by subclasses.
 
         Args:
-            messages (list[ChatCompletionMessageParam]): The messages to be sent.
+            messages (list[dict[str, str]]): The messages to be sent.
             ret_dict (Optional[dict[str, Any]], optional): A dictionary to capture the
                 method's return value. Defaults to None.
 
@@ -191,7 +321,7 @@ class LLMBase:
 
     def ask(
         self,
-        messages: list[ChatCompletionMessageParam],
+        messages: list[dict[str, str]],
         ret_dict: Optional[dict[str, any]] = None,
     ) -> tuple[Optional[str], float]:
         """
@@ -200,7 +330,7 @@ class LLMBase:
         This method wraps ask_base() with timeout handling using retry_overtime_kill.
 
         Args:
-            messages (list[ChatCompletionMessageParam]): The messages to be sent.
+            messages (list[dict[str, str]]): The messages to be sent.
             ret_dict (Optional[dict[str, any]], optional): A dictionary to capture the
                 method's return value. Defaults to None.
 
@@ -229,7 +359,7 @@ class LLMBase:
 
     def ask_with_test(
         self,
-        messages: list[ChatCompletionMessageParam],
+        messages: list[dict[str, str]],
         tests: Callable[[str], str],
     ) -> tuple[Any, float]:
         """
@@ -240,13 +370,15 @@ class LLMBase:
         Tests are also supposed to convert the response to the expected type.
 
         Args:
-            messages (list[ChatCompletionMessageParam]): The messages to send.
+            messages (list[dict[str, str]]): The messages to send.
             tests (Callable[[str], str]): A function to test and convert the response.
 
         Returns:
             tuple[Any, float]: The tested/converted response and the accumulated cost,
                 or ("termination_signal", accumulated_cost) if all attempts fail.
         """
+        import traceback
+
         cost_accumulation = 0.0
 
         def target_function(ret_dict: dict[str, Any], *args: Any) -> None:
@@ -289,61 +421,152 @@ class LLMBase:
         return "termination_signal", cost_accumulation
 
 
-class OpenAI_interface(LLMBase):
+class LiteLLM_interface(LLMBase):
     """
-    A client for interacting with OpenAI's interface.
+    A unified client for interacting with multiple LLM providers via LiteLLM.
 
-    This class provides methods to communicate with models through OpenAI's API,
-    with built-in retry functionality for handling timeouts.
+    Supports:
+    - claude-sonnet-4.5 (via OpenRouter)
+    - gpt-5.2 (via OpenRouter)
+    - gemini-pro-3.0 (direct via LiteLLM)
+    - deepseek-v3.2 (via OpenRouter, with optional reasoning)
 
     Attributes:
-        client (OpenAI): The OpenAI client instance for making API calls.
+        resolved_model (str): The resolved LiteLLM model identifier.
 
     Example:
-        >>> gpt = OpenAI_interface(api_key="your-key", model="gpt-4")
+        >>> llm = LiteLLM_interface(model="claude-sonnet-4.5")
         >>> messages = [{"role": "user", "content": "Hello!"}]
-        >>> response, cost = gpt.ask(messages)
+        >>> response, cost = llm.ask(messages)
     """
 
     def __init__(
         self,
-        api_key: str,
-        model: str = "gpt-4-mini",
-        timeout: float = 60,
+        api_key: Optional[str] = None,
+        model: str = "claude-sonnet-4.5",
+        timeout: float = 120,
         maximum_generation_attempts: int = 3,
-        maximum_timeout_attempts: int = 3,
+        maximum_timeout_attempts: int = 5,
         debug: bool = False,
+        max_tokens: int = 8192,
+        reasoning_effort: Optional[str] = None,
+        temperature: float = 0.7,
     ) -> None:
         """
-        Initialize the OpenAI client.
+        Initialize the LiteLLM client.
 
         Args:
-            api_key (str): The OpenAI API key for authentication.
-            model (str, optional): The model identifier to use. Defaults to 'gpt-4-mini'.
-            timeout (float, optional): Maximum time limit for API calls. Defaults to 60.
+            api_key (Optional[str]): API key (used for setting environment variables if needed).
+            model (str, optional): Model identifier or alias. Defaults to 'claude-sonnet-4.5'.
+            timeout (float, optional): Maximum time limit for API calls. Defaults to 120.
             maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
-            maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 3.
+            maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 5.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
+            max_tokens (int, optional): Maximum tokens for completion. Defaults to 8192.
+            reasoning_effort (Optional[str], optional): Reasoning effort level. Defaults to None.
+            temperature (float, optional): Sampling temperature. Defaults to 0.7.
         """
         super().__init__(
-            api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
+            api_key=api_key,
+            model=model,
+            timeout=timeout,
+            maximum_generation_attempts=maximum_generation_attempts,
+            maximum_timeout_attempts=maximum_timeout_attempts,
+            debug=debug,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
-        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
-            self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-        else:
-            self.client = OpenAI(api_key=api_key)
+        self.resolved_model = _resolve_model_name(model)
+        self.temperature = temperature
+
+        # Set API key in environment if provided
+        if api_key:
+            if _is_openrouter_model(self.resolved_model):
+                os.environ["OPENROUTER_API_KEY"] = api_key
+            elif _is_gemini_direct_model(self.resolved_model):
+                os.environ["GEMINI_API_KEY"] = api_key
+
+    def _build_api_params(
+        self,
+        messages: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """
+        Build the API parameters for the LiteLLM call.
+
+        Args:
+            messages (list[dict[str, str]]): The messages to be sent.
+
+        Returns:
+            dict[str, Any]: The API parameters.
+        """
+        litellm.modify_params = True
+
+        api_params: dict[str, Any] = {
+            "model": self.resolved_model,
+            "messages": messages,
+            "stream": False,
+            "num_retries": self.maximum_timeout_attempts,
+            "drop_params": True,
+        }
+
+        # Handle max tokens
+        if self.max_tokens is not None:
+            if _is_openai_model(self.resolved_model):
+                api_params["max_completion_tokens"] = self.max_tokens
+            else:
+                api_params["max_tokens"] = self.max_tokens
+
+        # Handle temperature (may be overridden for reasoning modes)
+        if self.temperature is not None:
+            api_params["temperature"] = self.temperature
+
+        # Handle reasoning_effort based on model routing
+        is_gemini_direct = _is_gemini_direct_model(self.resolved_model)
+        is_openrouter = _is_openrouter_model(self.resolved_model)
+        or_provider = _parse_openrouter_provider(self.resolved_model) if is_openrouter else None
+
+        if self.reasoning_effort and self.reasoning_effort in VALID_EFFORTS:
+            if is_gemini_direct:
+                # Gemini direct: pass reasoning_effort as parameter
+                api_params["reasoning_effort"] = self.reasoning_effort
+                # Gemini reasoning doesn't support temperature
+                api_params.pop("temperature", None)
+                api_params["drop_params"] = False
+
+            elif is_openrouter:
+                if or_provider == "openai":
+                    # GPT via OpenRouter: pass effort directly
+                    api_params["reasoning"] = {"effort": self.reasoning_effort}
+                    api_params["temperature"] = 1.0  # Required for OpenAI reasoning
+                    api_params["drop_params"] = False
+
+                elif or_provider == "anthropic":
+                    # Claude via OpenRouter: convert effort to token budget
+                    token_budget = _get_token_budget("anthropic", self.reasoning_effort)
+                    if token_budget:
+                        api_params["reasoning"] = {"max_tokens": token_budget}
+                        api_params["drop_params"] = False
+
+                elif or_provider == "deepseek":
+                    # DeepSeek via OpenRouter: enable reasoning with token budget
+                    token_budget = _get_token_budget("deepseek", self.reasoning_effort)
+                    if token_budget:
+                        api_params["reasoning"] = {"enabled": True, "max_tokens": token_budget}
+                        api_params["drop_params"] = False
+
+        return api_params
 
     def ask_base(
         self,
-        messages: list[ChatCompletionMessageParam],
+        messages: list[dict[str, str]],
         ret_dict: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[str], float]:
         """
-        Base method to send a message to the chat model and capture the response.
+        Base method to send a message to the LLM via LiteLLM and capture the response.
 
         Args:
-            messages (list[ChatCompletionMessageParam]): The messages to be sent to the chat model.
+            messages (list[dict[str, str]]): The messages to be sent to the chat model.
             ret_dict (Optional[dict[str, Any]], optional): A dictionary to capture the
                 method's return value. Defaults to None.
 
@@ -353,24 +576,51 @@ class OpenAI_interface(LLMBase):
         """
         self._print_debug_prompt(messages)
 
-        response: ChatCompletion = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-        )
+        api_params = self._build_api_params(messages)
 
-        if response.choices[0].message.content is None:
+        try:
+            response = completion(**api_params)
+        except Exception as e:
+            if self.debug:
+                print(f"LiteLLM API error: {e}")
+            if ret_dict is not None:
+                ret_dict["result"] = (None, 0.0)
             return None, 0.0
 
-        response_text: str = response.choices[0].message.content
+        # Extract response text
+        response_text = None
+        if response.choices and response.choices[0].message:
+            response_text = response.choices[0].message.content
+
+        if response_text is None:
+            if ret_dict is not None:
+                ret_dict["result"] = (None, 0.0)
+            return None, 0.0
+
         self._print_debug_response(response_text)
 
-        # Calculate cost
-        calculator_instance = Calculator(self.model, messages, response_text)
+        # Calculate cost from usage data
+        usage = getattr(response, "usage", None)
+        if usage:
+            input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            output_tokens = getattr(usage, "completion_tokens", 0) or 0
 
-        if self.model == "deepseek-chat" or self.model == "deepseek-reasoner":
-            cost = calculator_instance.calculate_cost_DeepSeek()
+            if self.debug:
+                print(
+                    f"Tokens: {input_tokens} in + {output_tokens} out = "
+                    f"{input_tokens + output_tokens} total"
+                )
+
+            # Calculate cost using the Calculator
+            calculator = Calculator(self.model)
+            calculator.input_token_length = input_tokens
+            calculator.output_token_length = output_tokens
+            cost = calculator.calculate_cost_from_tokens()
+
+            if self.debug:
+                print(f"Cost: ${cost:.6f}")
         else:
-            cost = calculator_instance.calculate_cost_GPT()
+            cost = 0.0
 
         if ret_dict is not None:
             ret_dict["result"] = (response_text, cost)
@@ -378,248 +628,11 @@ class OpenAI_interface(LLMBase):
         return response_text, cost
 
 
-class Anthropic_Bedrock_interface(LLMBase):
-    """
-    A client for interacting with Claude models through AWS Bedrock.
-
-    Provides methods to communicate with Anthropic models through AWS Bedrock API,
-    with built-in retry functionality for handling throttling and timeouts.
-    Supports Extended Thinking mode for complex reasoning tasks.
-
-    Attributes:
-        client: The Bedrock runtime client.
-        bedrock_model_id (str): The full Bedrock model identifier.
-        region_name (str): AWS region for Bedrock.
-        enable_thinking (bool): Whether extended thinking is enabled.
-        thinking_budget_tokens (int): Token budget for thinking (>= 1024).
-        max_tokens (int): Maximum output tokens.
-        temperature (float): Temperature (not used when thinking is enabled).
-
-    Example:
-        >>> # Without thinking
-        >>> claude = Anthropic_Bedrock_interface(model="claude-sonnet-4.5")
-        >>> # With thinking enabled
-        >>> claude_thinking = Anthropic_Bedrock_interface(
-        ...     model="claude-sonnet-4.5",
-        ...     thinking_budget_tokens=4000,
-        ...     max_tokens=12000
-        ... )
-    """
-
-    # Model ID mapping - ALL models now use inference profiles for Bedrock compatibility
-    MODEL_IDS = {
-        # Map friendly names to INFERENCE PROFILE IDs (not direct model IDs)
-        # Using "global." prefix for best availability (auto-routing across regions)
-        # Haiku family
-        "claude-haiku-3": "anthropic.claude-3-haiku-20240307-v1:0",
-        "claude-3-haiku": "anthropic.claude-3-haiku-20240307-v1:0",
-        "claude-haiku-3.5": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        "claude-3-5-haiku": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        "claude-haiku-4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "claude-4-5-haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        # Sonnet family - ALL require inference profiles
-        "claude-sonnet-3.5": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "claude-3-5-sonnet": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "claude-sonnet-3.7": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "claude-3-7-sonnet": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "claude-sonnet-4": "global.anthropic.claude-sonnet-4-20250514-v1:0",
-        "claude-4-sonnet": "global.anthropic.claude-sonnet-4-20250514-v1:0",
-        "claude-sonnet-4.5": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "claude-4-5-sonnet": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        # Opus family
-        "claude-opus-3": "anthropic.claude-3-opus-20240229-v1:0",
-        "claude-3-opus": "anthropic.claude-3-opus-20240229-v1:0",
-        "claude-opus-4": "us.anthropic.claude-opus-4-20250514-v1:0",
-        "claude-4-opus": "us.anthropic.claude-opus-4-20250514-v1:0",
-    }
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "claude-sonnet-4.5",
-        region_name: str = "us-east-1",
-        timeout: float = 300,
-        maximum_generation_attempts: int = 3,
-        maximum_timeout_attempts: int = 10,
-        debug: bool = False,
-        *,
-        enable_thinking: bool = False,
-        thinking_budget_tokens: int = 0,
-        max_tokens: int = 8192,
-        temperature: float = 0.7,
-    ) -> None:
-        """
-        Initialize the Anthropic Bedrock client with optional Extended Thinking.
-
-        Args:
-            api_key (Optional[str]): Not used (Bedrock uses AWS credentials).
-            model (str, optional): Model name. Defaults to 'claude-sonnet-4.5'.
-            region_name (str, optional): AWS region. Defaults to 'us-east-1'.
-            timeout (float, optional): Max time for API calls. Defaults to 300.
-            maximum_generation_attempts (int, optional): Max attempts. Defaults to 3.
-            maximum_timeout_attempts (int, optional): Max retries. Defaults to 10.
-            debug (bool, optional): Enable debug logging. Defaults to False.
-            enable_thinking (bool, optional): Enable extended thinking. Defaults to False.
-            thinking_budget_tokens (int, optional): Thinking token budget (>= 1024).
-                Defaults to 0 (disabled).
-            max_tokens (int, optional): Max output tokens. Defaults to 8192.
-            temperature (float, optional): Temperature (unused with thinking). Defaults to 0.7.
-        """
-        super().__init__(
-            api_key, model, timeout, maximum_generation_attempts, maximum_timeout_attempts, debug
-        )
-
-        self.region_name = region_name
-
-        sdk_config = Config(
-            connect_timeout=5,
-            read_timeout=int(timeout),
-            retries={"total_max_attempts": 8, "mode": "adaptive"},
-        )
-        self.client = boto3.client("bedrock-runtime", region_name=region_name, config=sdk_config)
-
-        self.bedrock_model_id = self.MODEL_IDS.get(model, model)
-
-        self.enable_thinking = enable_thinking or (thinking_budget_tokens >= 1024)
-        self.thinking_budget_tokens = thinking_budget_tokens
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-
-    def _convert_messages(
-        self, messages: list[ChatCompletionMessageParam]
-    ) -> tuple[Optional[str], list[dict]]:
-        """
-        Convert OpenAI-style messages to Bedrock format.
-
-        Args:
-            messages (list[ChatCompletionMessageParam]): OpenAI-formatted messages.
-
-        Returns:
-            tuple[Optional[str], list[dict]]: (system_message, converted_messages)
-        """
-        system_message = None
-        converted_messages = []
-
-        for m in messages:
-            if m["role"] == "system":
-                system_message = m["content"]
-                continue
-            converted_messages.append({"role": m["role"], "content": [{"text": m["content"]}]})
-
-        return system_message, converted_messages
-
-    def ask_base(
-        self,
-        messages: list[ChatCompletionMessageParam],
-        ret_dict: Optional[dict[str, Any]] = None,
-    ) -> tuple[Optional[str], float]:
-        """
-        Base method to send a message to Claude via Bedrock with optional Extended Thinking.
-
-        NOTE: We calculate cost directly from Bedrock's response usage data.
-        We do NOT use the Calculator class for Bedrock token counting.
-        """
-        self._print_debug_prompt(messages)
-
-        system_message, converted_messages = self._convert_messages(messages)
-
-        inf_cfg: dict[str, Any] = {"maxTokens": int(self.max_tokens)}
-
-        addl_fields: Optional[dict] = None
-        if self.enable_thinking:
-            budget = max(1024, int(self.thinking_budget_tokens))
-            if budget >= inf_cfg["maxTokens"]:
-                inf_cfg["maxTokens"] = budget + 2048
-            addl_fields = {"thinking": {"type": "enabled", "budget_tokens": budget}}
-
-            if self.debug:
-                print(
-                    f"Extended thinking enabled: budget={budget}, max_tokens={inf_cfg['maxTokens']}"
-                )
-        else:
-            inf_cfg["temperature"] = float(self.temperature)
-
-        params: dict[str, Any] = {
-            "modelId": self.bedrock_model_id,
-            "messages": converted_messages,
-            "inferenceConfig": inf_cfg,
-        }
-
-        if system_message is not None:
-            params["system"] = [{"text": system_message}]
-
-        if addl_fields is not None:
-            params["additionalModelRequestFields"] = addl_fields
-
-        for attempt in range(1, self.maximum_timeout_attempts + 1):
-            try:
-                response = self.client.converse(**params)
-
-                blocks = response.get("output", {}).get("message", {}).get("content", []) or []
-                texts: list[str] = []
-                thinking_texts: list[str] = []
-
-                for b in blocks:
-                    if isinstance(b, dict):
-                        if "text" in b and isinstance(b["text"], str):
-                            texts.append(b["text"])
-                        elif "thinking" in b and isinstance(b["thinking"], str):
-                            thinking_texts.append(b["thinking"])
-
-                response_text = "\n".join(texts).strip() if texts else ""
-
-                if self.debug and thinking_texts:
-                    print(f"--- Thinking content ({len(thinking_texts)} blocks) ---")
-                    for i, think in enumerate(thinking_texts, 1):
-                        print(f"Thinking block {i}: {think[:200]}...")
-
-                self._print_debug_response(response_text)
-
-                usage = response.get("usage", {}) or {}
-                input_tokens = int(usage.get("inputTokens", 0))
-                output_tokens = int(usage.get("outputTokens", 0))
-
-                if self.debug:
-                    print(
-                        f"Bedrock tokens: {input_tokens} in + {output_tokens} out = "
-                        f"{input_tokens + output_tokens} total"
-                    )
-
-                input_price = Calculator.Anthropic_input_pricing.get(self.model, 3.0)
-                output_price = Calculator.Anthropic_output_pricing.get(self.model, 15.0)
-                cost = (input_tokens * input_price + output_tokens * output_price) / 1e6
-
-                if self.debug:
-                    print(f"Cost: ${cost:.6f}")
-
-                if ret_dict is not None:
-                    ret_dict["result"] = (response_text, cost)
-
-                return response_text, cost
-
-            except ClientError as exc:
-                error_code = exc.response["Error"]["Code"]
-
-                if error_code != "ThrottlingException":
-                    print(f"Bedrock API error: {error_code}")
-                    raise
-
-                if attempt < self.maximum_timeout_attempts:
-                    sleep_for = min(1.0 * 2 ** (attempt - 1) + random.uniform(0, 0.5), 20)
-                    print(
-                        f"Throttled, retrying in {sleep_for:.2f}s "
-                        f"(attempt {attempt}/{self.maximum_timeout_attempts})"
-                    )
-                    time.sleep(sleep_for)
-                else:
-                    raise RuntimeError(
-                        f"Exceeded {self.maximum_timeout_attempts} attempts due to throttling."
-                    )
-
-        return None, 0.0
+# Backward compatibility alias
+OpenAI_interface = LiteLLM_interface
 
 
-def extract_code_base(raw_sequence, language="python"):
+def extract_code_base(raw_sequence: str, language: str = "python") -> str:
     """
     Extract code from markdown code blocks.
 
@@ -633,15 +646,15 @@ def extract_code_base(raw_sequence, language="python"):
     try:
         sub1 = f"```{language}"
         idx1 = raw_sequence.index(sub1)
-    except:
+    except ValueError:
         try:
             sub1 = f"``` {language}"
             idx1 = raw_sequence.index(sub1)
-        except:
+        except ValueError:
             try:
                 sub1 = "```"
                 idx1 = raw_sequence.index(sub1)
-            except:
+            except ValueError:
                 return raw_sequence
     sub2 = "```"
     idx2 = raw_sequence.index(
@@ -652,7 +665,7 @@ def extract_code_base(raw_sequence, language="python"):
     return extraction
 
 
-def extract_code(raw_sequence, language="python", mode="code"):
+def extract_code(raw_sequence: str, language: str = "python", mode: str = "code") -> Any:
     """
     Extract code from markdown and optionally evaluate as Python object.
 

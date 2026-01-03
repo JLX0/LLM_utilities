@@ -1,277 +1,279 @@
-import os
+"""
+Cost calculation utilities for LLM API usage.
 
-from anthropic import Anthropic
+Supports:
+- claude-sonnet-4.5
+- gpt-5.2
+- gemini-pro-3.0
+- deepseek-v3.2
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Optional
+
 import tiktoken
-import transformers
 
 from LLM_utils.prompter import PromptBase
 
 
 class Calculator:
-    # Pricing per 1M input tokens in USD for GPT models
+    """
+    Calculator for estimating and tracking LLM API costs.
+
+    Supports multiple providers:
+    - OpenAI (GPT models)
+    - Anthropic (Claude models)
+    - Google (Gemini models)
+    - DeepSeek models
+
+    Attributes:
+        model (str): The model identifier.
+        formatted_input_sequence: The formatted input messages.
+        output_sequence_string: The output text string.
+        input_token_length (int): Number of input tokens.
+        output_token_length (int): Number of output tokens.
+    """
+
+    # =============================================================================
+    # Pricing per 1M tokens in USD
+    # =============================================================================
+
+    # GPT pricing (via OpenRouter or direct)
     GPT_input_pricing = {
-        "gpt-5": 1.25,
-        "gpt-5-mini": 0.25,
-        "gpt-5-nano": 0.05,
-        "gpt-5-pro": 15.00,
-        # Reasoning
-        "o3": 2.00,
-        "o3-pro": 20.00,
-        # 4o family that's still current
-        "gpt-4o": 2.50,
-        "gpt-4o-mini": 0.15,
-        # Realtime (text token pricing; still LLM usage)
-        "gpt-realtime": 4.00,
-        "gpt-realtime-mini": 0.60,
+        "gpt-5.2": 2.50,
+        "gpt-5": 2.50,
+        "openrouter/openai/gpt-5.2": 2.50,
     }
 
-    DeepSeek_input_pricing = {
-        "deepseek-chat": 0.28,
-        "deepseek-reasoner": 0.28,
-    }  # assume always cache miss
-
-    DeepSeek_output_pricing = {
-        "deepseek-chat": 0.42,
-        "deepseek-reasoner": 0.42,
-    }
-
-    # Pricing per 1M output tokens in USD for GPT models
     GPT_output_pricing = {
+        "gpt-5.2": 10.00,
         "gpt-5": 10.00,
-        "gpt-5-mini": 2.00,
-        "gpt-5-nano": 0.40,
-        "gpt-5-pro": 120.00,
-        # Reasoning
-        "o3": 8.00,
-        "o3-pro": 80.00,
-        # 4o family that's still current
-        "gpt-4o": 10.00,
-        "gpt-4o-mini": 0.60,
-        # Realtime (text token pricing)
-        "gpt-realtime": 16.00,
-        "gpt-realtime-mini": 2.40,
+        "openrouter/openai/gpt-5.2": 10.00,
     }
 
-    # Anthropic pricing per 1M tokens in USD (as of 2025)
+    # Anthropic pricing (via OpenRouter or direct)
     Anthropic_input_pricing = {
-        # Haiku family
-        "claude-haiku-3": 0.25,
-        "claude-3-haiku": 0.25,
-        "claude-haiku-3.5": 0.80,
-        "claude-3-5-haiku": 0.80,
-        "claude-haiku-4.5": 1.00,
-        "claude-4-5-haiku": 1.00,
-        # Sonnet family
-        "claude-sonnet-3.5": 3.00,
-        "claude-3-5-sonnet": 3.00,
-        "claude-sonnet-3.7": 3.00,
-        "claude-3-7-sonnet": 3.00,
-        "claude-sonnet-4": 3.00,
-        "claude-4-sonnet": 3.00,
         "claude-sonnet-4.5": 3.00,
         "claude-4-5-sonnet": 3.00,
-        "claude-sonnet-4-20250514": 3.00,
-        # Sonnet 4.1 (with thinking tokens)
-        "claude-sonnet-4.1": 5.00,
-        "claude-4-1-sonnet": 5.00,
-        # Opus family
-        "claude-opus-4": 15.00,
-        "claude-4-opus": 15.00,
-        "claude-opus-4.1": 20.00,
-        "claude-4-1-opus": 20.00,
-        "claude-3-opus": 15.00,
+        "claude-sonnet-4-5": 3.00,
+        "openrouter/anthropic/claude-sonnet-4.5": 3.00,
     }
 
     Anthropic_output_pricing = {
-        # Haiku family
-        "claude-haiku-3": 1.25,
-        "claude-3-haiku": 1.25,
-        "claude-haiku-3.5": 4.00,
-        "claude-3-5-haiku": 4.00,
-        "claude-haiku-4.5": 5.00,
-        "claude-4-5-haiku": 5.00,
-        # Sonnet family
-        "claude-sonnet-3.5": 15.00,
-        "claude-3-5-sonnet": 15.00,
-        "claude-sonnet-3.7": 15.00,
-        "claude-3-7-sonnet": 15.00,
-        "claude-sonnet-4": 15.00,
-        "claude-4-sonnet": 15.00,
         "claude-sonnet-4.5": 15.00,
         "claude-4-5-sonnet": 15.00,
-        "claude-sonnet-4-20250514": 15.00,
-        # Sonnet 4.1 (with thinking tokens)
-        "claude-sonnet-4.1": 25.00,
-        "claude-4-1-sonnet": 25.00,
-        # Opus family
-        "claude-opus-4": 75.00,
-        "claude-4-opus": 75.00,
-        "claude-opus-4.1": 80.00,
-        "claude-4-1-opus": 80.00,
-        "claude-3-opus": 75.00,
+        "claude-sonnet-4-5": 15.00,
+        "openrouter/anthropic/claude-sonnet-4.5": 15.00,
     }
 
-    def __init__(self, model, formatted_input_sequence=None, output_sequence_string=None):
+    # Gemini pricing (direct via LiteLLM)
+    Gemini_input_pricing = {
+        "gemini-pro-3.0": 1.25,
+        "gemini-3-pro": 1.25,
+        "gemini-pro-3": 1.25,
+        "gemini/gemini-3-pro-preview": 1.25,
+    }
+
+    Gemini_output_pricing = {
+        "gemini-pro-3.0": 5.00,
+        "gemini-3-pro": 5.00,
+        "gemini-pro-3": 5.00,
+        "gemini/gemini-3-pro-preview": 5.00,
+    }
+
+    # DeepSeek v3.2 pricing (via OpenRouter)
+    DeepSeek_input_pricing = {
+        "deepseek-v3.2": 0.55,
+        "deepseek-3.2": 0.55,
+        "deepseek": 0.55,
+        "openrouter/deepseek/deepseek-v3.2": 0.55,
+    }
+
+    DeepSeek_output_pricing = {
+        "deepseek-v3.2": 2.19,
+        "deepseek-3.2": 2.19,
+        "deepseek": 2.19,
+        "openrouter/deepseek/deepseek-v3.2": 2.19,
+    }
+
+    def __init__(
+        self,
+        model: str,
+        formatted_input_sequence: Optional[list[dict[str, str]]] = None,
+        output_sequence_string: Optional[str] = None,
+    ):
+        """
+        Initialize the Calculator.
+
+        Args:
+            model (str): The model identifier.
+            formatted_input_sequence: Optional formatted input messages.
+            output_sequence_string: Optional output text string.
+        """
         self.model = model
         self.formatted_input_sequence = formatted_input_sequence
         self.output_sequence_string = output_sequence_string
         self.input_token_length = 0
         self.output_token_length = 0
 
-    def calculate_input_token_length_GPT(self):
-        """Calculate the number of tokens used by a list of messages."""
+    def _get_provider(self) -> str:
+        """Determine the provider from the model name."""
+        model_lower = self.model.lower()
+
+        if "claude" in model_lower or "anthropic" in model_lower:
+            return "anthropic"
+        elif "gpt" in model_lower or "openai" in model_lower:
+            return "openai"
+        elif "gemini" in model_lower:
+            return "gemini"
+        elif "deepseek" in model_lower:
+            return "deepseek"
+        else:
+            return "unknown"
+
+    def _get_input_price(self) -> float:
+        """Get the input price per 1M tokens for the model."""
+        # Check all pricing dictionaries
+        if self.model in self.GPT_input_pricing:
+            return self.GPT_input_pricing[self.model]
+        elif self.model in self.Anthropic_input_pricing:
+            return self.Anthropic_input_pricing[self.model]
+        elif self.model in self.Gemini_input_pricing:
+            return self.Gemini_input_pricing[self.model]
+        elif self.model in self.DeepSeek_input_pricing:
+            return self.DeepSeek_input_pricing[self.model]
+
+        # Fallback based on provider
+        provider = self._get_provider()
+        if provider == "openai":
+            return 2.50
+        elif provider == "anthropic":
+            return 3.00
+        elif provider == "gemini":
+            return 1.25
+        elif provider == "deepseek":
+            return 0.55
+        else:
+            return 3.00  # Default fallback
+
+    def _get_output_price(self) -> float:
+        """Get the output price per 1M tokens for the model."""
+        # Check all pricing dictionaries
+        if self.model in self.GPT_output_pricing:
+            return self.GPT_output_pricing[self.model]
+        elif self.model in self.Anthropic_output_pricing:
+            return self.Anthropic_output_pricing[self.model]
+        elif self.model in self.Gemini_output_pricing:
+            return self.Gemini_output_pricing[self.model]
+        elif self.model in self.DeepSeek_output_pricing:
+            return self.DeepSeek_output_pricing[self.model]
+
+        # Fallback based on provider
+        provider = self._get_provider()
+        if provider == "openai":
+            return 10.00
+        elif provider == "anthropic":
+            return 15.00
+        elif provider == "gemini":
+            return 5.00
+        elif provider == "deepseek":
+            return 2.19
+        else:
+            return 15.00  # Default fallback
+
+    def calculate_cost_from_tokens(self) -> float:
+        """
+        Calculate cost based on pre-set input_token_length and output_token_length.
+
+        Returns:
+            float: The calculated cost in USD.
+        """
+        input_price = self._get_input_price()
+        output_price = self._get_output_price()
+
+        input_cost = self.input_token_length * input_price / 1e6
+        output_cost = self.output_token_length * output_price / 1e6
+
+        return input_cost + output_cost
+
+    def calculate_input_token_length_tiktoken(self) -> int:
+        """
+        Calculate the number of input tokens using tiktoken.
+
+        This is an approximation that works for most models.
+
+        Returns:
+            int: Number of input tokens.
+        """
         try:
-            encoding = tiktoken.encoding_for_model(self.model)
+            encoding = tiktoken.encoding_for_model("gpt-4")
         except KeyError:
-            print(
-                "Warning: model not found for tokenization. Using cl100k_base encoding for cost "
-                "calculation."
-            )
             encoding = tiktoken.get_encoding("cl100k_base")
 
         tokens_per_message = 3
         tokens_per_name = 1
 
         num_tokens = 0
-        for message in self.formatted_input_sequence:
-            num_tokens += tokens_per_message
-            for key, value in message.items():
-                num_tokens += len(encoding.encode(value))
-                if key == "name":
-                    num_tokens += tokens_per_name
+        if self.formatted_input_sequence:
+            for message in self.formatted_input_sequence:
+                num_tokens += tokens_per_message
+                for key, value in message.items():
+                    if isinstance(value, str):
+                        num_tokens += len(encoding.encode(value))
+                    if key == "name":
+                        num_tokens += tokens_per_name
         num_tokens += 3  # Every reply is primed with <|start|>assistant<|message|>
         return num_tokens
 
-    def calculate_output_token_length_GPT(self):
+    def calculate_output_token_length_tiktoken(self) -> int:
         """
-        Calculates the number of tokens in a given output sequence.
-
-        Parameters:
-            output_sequence (str): The text output generated by the model.
-            model (str): The name of the model for tokenization. Default is "gpt-3.5-turbo".
+        Calculate the number of output tokens using tiktoken.
 
         Returns:
-            int: The number of tokens in the output sequence.
+            int: Number of output tokens.
         """
         try:
-            # Initialize tokenizer for the specific model
-            tokenizer = tiktoken.encoding_for_model(self.model)
+            tokenizer = tiktoken.encoding_for_model("gpt-4")
         except KeyError:
-            print("Warning: Model not found. Using cl100k_base encoding as a fallback.")
             tokenizer = tiktoken.get_encoding("cl100k_base")
 
-        # Tokenize the output sequence
-        tokens = tokenizer.encode(self.output_sequence_string)
+        if self.output_sequence_string:
+            tokens = tokenizer.encode(self.output_sequence_string)
+            return len(tokens)
+        return 0
 
-        # Return the token count
-        return len(tokens)
+    def calculate_cost(self) -> float:
+        """
+        Calculate the total cost based on input and output sequences.
 
-    def calculate_cost_GPT(self):
+        This method uses tiktoken for token counting (approximation).
+
+        Returns:
+            float: The calculated cost in USD.
+        """
         if self.formatted_input_sequence is not None:
-            self.input_token_length = self.calculate_input_token_length_GPT()
-            input_cost = self.input_token_length * self.GPT_input_pricing[self.model] / 1e6
-        else:
-            input_cost = 0
+            self.input_token_length = self.calculate_input_token_length_tiktoken()
         if self.output_sequence_string is not None:
-            self.output_token_length = self.calculate_output_token_length_GPT()
-            output_cost = self.output_token_length * self.GPT_output_pricing[self.model] / 1e6
-        else:
-            output_cost = 0
-        return input_cost + output_cost
+            self.output_token_length = self.calculate_output_token_length_tiktoken()
 
-    def calculate_token_length_DeepSeek(self):
+        return self.calculate_cost_from_tokens()
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-
-        tokenizer_relative_path = "tokenizers/deepseek"
-
-        tokenizer_absolute_path = os.path.join(module_dir, tokenizer_relative_path)
-
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            tokenizer_absolute_path, trust_remote_code=True
-        )
-
-        if self.formatted_input_sequence is not None:
-            input_sequence = PromptBase.formatted_to_string_OpenAI(self.formatted_input_sequence)
-            input_tokenized = tokenizer.encode(input_sequence)
-            self.input_token_length = len(input_tokenized)
-
-        if self.output_sequence_string is not None:
-            output_tokenized = tokenizer.encode(self.output_sequence_string)
-            self.output_token_length = len(output_tokenized)
-
-    def calculate_cost_DeepSeek(self):
-        self.calculate_token_length_DeepSeek()
-        cost = (
-            self.input_token_length * self.DeepSeek_input_pricing[self.model]
-            + self.output_token_length * self.DeepSeek_output_pricing[self.model]
-        )
-        cost /= 1e6
-        return cost
-
-    def calculate_token_length_Anthropic(self):
+    def calculate_input_token_length(
+        self, input_sequence: list[str] | list[dict[str, str]], form: str = "list"
+    ) -> int:
         """
-        Calculate token lengths using the official Anthropic API tokenizer.
+        Calculate input token length from various input formats.
 
-        IMPORTANT: This method requires ANTHROPIC_API_KEY and only works with
-        Anthropic's direct API, NOT with AWS Bedrock.
+        Args:
+            input_sequence: The input sequence.
+            form (str): Format of input - "list" for list of strings, "formatted" for
+                list of message dicts.
 
-        Bedrock users: Don't use Calculator for tokenization. Get token counts
-        from the API response directly.
+        Returns:
+            int: Number of input tokens.
         """
-        # Initialize Anthropic client (will raise error if no API key)
-        client = Anthropic()
-
-        if self.formatted_input_sequence is not None:
-            # Convert OpenAI format to Anthropic format
-            messages = []
-            system_message = None
-
-            for msg in self.formatted_input_sequence:
-                if msg["role"] == "system":
-                    system_message = msg["content"]
-                else:
-                    messages.append({"role": msg["role"], "content": msg["content"]})
-
-            # Count input tokens using Anthropic's official method
-            count_params = {"model": self.model, "messages": messages}
-            if system_message:
-                count_params["system"] = system_message
-
-            response = client.messages.count_tokens(**count_params)
-            self.input_token_length = response.input_tokens
-
-        if self.output_sequence_string is not None:
-            # For output tokens, count them as a message
-            output_response = client.messages.count_tokens(
-                model=self.model,
-                messages=[{"role": "assistant", "content": self.output_sequence_string}],
-            )
-            self.output_token_length = output_response.input_tokens
-
-    def calculate_cost_Anthropic(self):
-        """
-        Calculate cost for Anthropic models using the official tokenizer.
-
-        This method uses Anthropic's actual tokenizer via their SDK, providing
-        accurate token counts. Note that this requires API access and will make
-        API calls to count tokens.
-        """
-        self.calculate_token_length_Anthropic()
-
-        input_cost = (
-            self.input_token_length * self.Anthropic_input_pricing.get(self.model, 3.0) / 1e6
-        )
-        output_cost = (
-            self.output_token_length * self.Anthropic_output_pricing.get(self.model, 15.0) / 1e6
-        )
-
-        # Note: This does NOT include thinking tokens for Claude 4.1 models
-        # Those would need to be tracked separately from the actual API response
-
-        return input_cost + output_cost
-
-    def calculate_input_token_length(self, input_sequence, form="list"):
         if form == "list":
             self.formatted_input_sequence = PromptBase.list_to_formatted_OpenAI(input_sequence)
         elif form == "formatted":
@@ -279,31 +281,28 @@ class Calculator:
         else:
             raise ValueError("Invalid form. Use 'list' or 'formatted'.")
 
-        if self.model in self.GPT_input_pricing:
-            self.input_token_length = self.calculate_input_token_length_GPT()
-        elif self.model in self.DeepSeek_input_pricing:
-            self.calculate_token_length_DeepSeek()
-        elif self.model in self.Anthropic_input_pricing:
-            # For Anthropic models: check if we have API access
-            # If ANTHROPIC_API_KEY is not set, use GPT tokenizer for approximation
-            # (This is only for length limiting; actual costs come from API responses)
-            import os
-
-            if os.environ.get("ANTHROPIC_API_KEY"):
-                # Direct Anthropic API - use their tokenizer
-                self.calculate_token_length_Anthropic()
-            else:
-                # Bedrock or no API key - use GPT tokenizer for approximation
-                # This is ONLY for length_limiter truncation, NOT for billing
-                self.input_token_length = self.calculate_input_token_length_GPT()
-        else:
-            raise ValueError(f"Model {self.model} not supported for token length calculation.")
-
+        self.input_token_length = self.calculate_input_token_length_tiktoken()
         return self.input_token_length
 
     def length_limiter(
-        self, input_sequence, limit, truncation=True, include_truncation_warning=True
-    ):
+        self,
+        input_sequence: list[str],
+        limit: int,
+        truncation: bool = True,
+        include_truncation_warning: bool = True,
+    ) -> list[str]:
+        """
+        Limit the input sequence to a certain token length.
+
+        Args:
+            input_sequence (list[str]): The input sequence as a list of strings.
+            limit (int): Maximum token limit.
+            truncation (bool): Whether to truncate if over limit. Defaults to True.
+            include_truncation_warning (bool): Whether to add a warning message. Defaults to True.
+
+        Returns:
+            list[str]: The (possibly truncated) input sequence.
+        """
         self.calculate_input_token_length(input_sequence, form="list")
 
         if self.input_token_length > limit:
@@ -326,17 +325,13 @@ class Calculator:
                 # Convert the input sequence to a single string for truncation
                 input_string = " ".join(input_sequence)
 
-                # Calculate the token-to-string length ratio
-                token_to_length_ratio = self.input_token_length / len(input_string)
-
                 # Estimate the required reduction percentage
                 required_reduction_ratio = adjusted_limit / self.input_token_length
 
                 # Apply the estimated reduction
                 truncated_length = int(len(input_string) * required_reduction_ratio)
-                truncated_string = input_string[:truncated_length]
 
-                # Split the truncated string back into a list of strings, preserving the original structure
+                # Split the truncated string back into a list of strings
                 truncated_input_sequence = []
                 current_length = 0
                 for sentence in input_sequence:
@@ -354,14 +349,13 @@ class Calculator:
                 # Re-calculate the token length to ensure it's within the adjusted limit
                 self.calculate_input_token_length(truncated_input_sequence, form="list")
 
-                # If the token count is still over the adjusted limit, adjust further iteratively
+                # Iteratively adjust if still over limit
+                truncated_string = " ".join(truncated_input_sequence)
                 while self.input_token_length > adjusted_limit:
-                    # Re-estimate the required reduction ratio based on the current token count
                     required_reduction_ratio = adjusted_limit / self.input_token_length
                     truncated_length = int(len(truncated_string) * required_reduction_ratio)
                     truncated_string = truncated_string[:truncated_length]
 
-                    # Rebuild the truncated input sequence
                     truncated_input_sequence = []
                     current_length = 0
                     for sentence in input_sequence:
@@ -375,7 +369,6 @@ class Calculator:
                                 truncated_input_sequence.append(truncated_sentence)
                             break
 
-                    # Re-calculate the token length
                     self.calculate_input_token_length(truncated_input_sequence, form="list")
 
                 # Append the truncation warning if required
@@ -393,35 +386,62 @@ class Calculator:
             return input_sequence
 
 
+def get_supported_models_pricing() -> dict[str, dict[str, float]]:
+    """
+    Get pricing information for all supported models.
+
+    Returns:
+        dict: A dictionary with model names as keys and pricing info as values.
+    """
+    models = {}
+
+    # Add all models with their pricing
+    for model in Calculator.GPT_input_pricing:
+        models[model] = {
+            "input_per_1m": Calculator.GPT_input_pricing[model],
+            "output_per_1m": Calculator.GPT_output_pricing.get(model, 10.0),
+        }
+
+    for model in Calculator.Anthropic_input_pricing:
+        models[model] = {
+            "input_per_1m": Calculator.Anthropic_input_pricing[model],
+            "output_per_1m": Calculator.Anthropic_output_pricing.get(model, 15.0),
+        }
+
+    for model in Calculator.Gemini_input_pricing:
+        models[model] = {
+            "input_per_1m": Calculator.Gemini_input_pricing[model],
+            "output_per_1m": Calculator.Gemini_output_pricing.get(model, 5.0),
+        }
+
+    for model in Calculator.DeepSeek_input_pricing:
+        models[model] = {
+            "input_per_1m": Calculator.DeepSeek_input_pricing[model],
+            "output_per_1m": Calculator.DeepSeek_output_pricing.get(model, 2.19),
+        }
+
+    return models
+
+
 if __name__ == "__main__":
-    # Define the model and input sequence
-    model = "gpt-3.5-turbo-0125"
-    input_sequence = [
-        "This is a long input sequence that needs to be truncated.",
-        "Another part of the sequence that adds to the token count.",
-        "This is just some additional text to make the sequence longer.",
-        "The goal is to ensure the length_limiter works as expected.",
+    # Test the Calculator with different models
+    print("Testing cost calculation for supported models:\n")
+
+    test_models = [
+        "claude-sonnet-4.5",
+        "gpt-5.2",
+        "gemini-pro-3.0",
+        "deepseek-v3.2",
     ]
-    limit = 45  # Token limit for testing
 
-    # Create an instance of the Calculator class
-    calculator = Calculator(model)
+    for model in test_models:
+        calc = Calculator(model)
+        calc.input_token_length = 1000
+        calc.output_token_length = 500
+        cost = calc.calculate_cost_from_tokens()
+        print(f"{model}: ${cost:.6f} for 1000 input + 500 output tokens")
 
-    # Test the length_limiter method with the warning message
-    print("Original Input Sequence:")
-    print(input_sequence)
-    print("\nToken Count Before Truncation:")
-    input_token_length = calculator.calculate_input_token_length(input_sequence, form="list")
-    print(f"Input Token Length: {input_token_length}")
-
-    # Apply the length_limiter with the warning message
-    truncated_sequence = calculator.length_limiter(
-        input_sequence, limit, include_truncation_warning=True
-    )
-
-    # Print the results
-    print("\nTruncated Input Sequence with Warning:")
-    print(truncated_sequence)
-    print("\nToken Count After Truncation:")
-    calculator.calculate_input_token_length(truncated_sequence, form="list")
-    print(f"Input Token Length: {calculator.input_token_length}")
+    print("\nAll supported models pricing:")
+    pricing = get_supported_models_pricing()
+    for model, prices in pricing.items():
+        print(f"  {model}: ${prices['input_per_1m']}/1M in, ${prices['output_per_1m']}/1M out")

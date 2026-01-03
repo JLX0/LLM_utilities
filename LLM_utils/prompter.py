@@ -7,6 +7,91 @@ from typing import Callable
 from LLM_utils.environment import load_packages
 
 
+SUPPORTED_MODELS = [
+    "claude-sonnet-4.5",
+    "gpt-5.2",
+    "gemini-pro-3.0",
+    "deepseek-v3.2",
+]
+
+SUPPORTED_MODEL_ALIASES = {
+    # Claude
+    "claude-sonnet-4.5": "claude-sonnet-4.5",
+    "claude-4-5-sonnet": "claude-sonnet-4.5",
+    "claude-sonnet-4-5": "claude-sonnet-4.5",
+    "claude": "claude-sonnet-4.5",
+    # GPT
+    "gpt-5.2": "gpt-5.2",
+    "gpt-5": "gpt-5.2",
+    "gpt": "gpt-5.2",
+    # Gemini
+    "gemini-pro-3.0": "gemini-pro-3.0",
+    "gemini-3-pro": "gemini-pro-3.0",
+    "gemini-pro-3": "gemini-pro-3.0",
+    "gemini": "gemini-pro-3.0",
+    # DeepSeek
+    "deepseek-v3.2": "deepseek-v3.2",
+    "deepseek-3.2": "deepseek-v3.2",
+    "deepseek": "deepseek-v3.2",
+}
+
+VALID_REASONING_EFFORTS = ("low", "medium", "high")
+
+
+def get_supported_models() -> list[str]:
+    """Return the list of supported model names."""
+    return SUPPORTED_MODELS.copy()
+
+
+def get_model_aliases() -> dict[str, str]:
+    """Return the dictionary of model aliases to canonical names."""
+    return SUPPORTED_MODEL_ALIASES.copy()
+
+
+def resolve_model_name(model: str) -> str:
+    """
+    Resolve a model name or alias to its canonical form.
+
+    Args:
+        model (str): Model name or alias.
+
+    Returns:
+        str: Canonical model name.
+
+    Raises:
+        ValueError: If the model is not supported.
+    """
+    canonical = SUPPORTED_MODEL_ALIASES.get(model.lower(), model)
+    if canonical not in SUPPORTED_MODELS:
+        supported = ", ".join(SUPPORTED_MODELS)
+        raise ValueError(
+            f"Model '{model}' is not supported. Supported models: {supported}"
+        )
+    return canonical
+
+
+def validate_reasoning_effort(effort: str | None) -> str | None:
+    """
+    Validate reasoning effort level.
+
+    Args:
+        effort (str | None): The reasoning effort level.
+
+    Returns:
+        str | None: The validated effort level or None.
+
+    Raises:
+        ValueError: If the effort level is invalid.
+    """
+    if effort is None:
+        return None
+    if effort.lower() not in VALID_REASONING_EFFORTS:
+        raise ValueError(
+            f"Invalid reasoning effort '{effort}'. Valid values: {VALID_REASONING_EFFORTS}"
+        )
+    return effort.lower()
+
+
 class PromptBase:
     """
     A base class for managing and formatting prompts for Language Learning Models (LLMs).
@@ -67,7 +152,7 @@ class PromptBase:
             >>> base = PromptBase()
             >>> result = base.list_to_formatted_OpenAI(["First prompt", "Second prompt"])
             >>> result[0]["content"]
-            'First prompt\nSecond prompt'
+            'First prompt\\nSecond prompt'
         """
         combined_content = "\n".join(prompt_as_list)
         formatted_prompt = [{"role": "user", "content": combined_content}]
@@ -388,13 +473,13 @@ class PromptBase:
 
 def available_packages_prompt(environment_name: str) -> list[str]:
     """
-    Creae a prompt string describing the packages installed in the specified Conda environment.
+    Create a prompt string describing the packages installed in the specified Conda environment.
 
     Args:
         environment_name (str): Name of the Conda environment.
 
     Returns:
-        str: A string describing the installed packages in the environment.
+        list[str]: A list of strings describing the installed packages in the environment.
     """
     # Load packages for the environment
     packages = load_packages(environment_name)
