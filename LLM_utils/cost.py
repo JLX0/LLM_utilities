@@ -10,9 +10,6 @@ Supports:
 
 from __future__ import annotations
 
-import os
-from typing import Optional
-
 import tiktoken
 
 from LLM_utils.prompter import PromptBase
@@ -36,9 +33,7 @@ class Calculator:
         output_token_length (int): Number of output tokens.
     """
 
-    # =============================================================================
     # Pricing per 1M tokens in USD
-    # =============================================================================
 
     # GPT pricing (via OpenRouter or direct)
     GPT_input_pricing = {
@@ -101,8 +96,8 @@ class Calculator:
     def __init__(
         self,
         model: str,
-        formatted_input_sequence: Optional[list[dict[str, str]]] = None,
-        output_sequence_string: Optional[str] = None,
+        formatted_input_sequence: list[dict[str, str]] | None = None,
+        output_sequence_string: str | None = None,
     ):
         """
         Initialize the Calculator.
@@ -260,14 +255,12 @@ class Calculator:
 
         return self.calculate_cost_from_tokens()
 
-    def calculate_input_token_length(
-        self, input_sequence: list[str] | list[dict[str, str]], form: str = "list"
-    ) -> int:
+    def calculate_input_token_length(self, input_sequence: list[str], form: str = "list") -> int:
         """
         Calculate input token length from various input formats.
 
         Args:
-            input_sequence: The input sequence.
+            input_sequence: The input sequence as a list of strings.
             form (str): Format of input - "list" for list of strings, "formatted" for
                 list of message dicts.
 
@@ -277,7 +270,9 @@ class Calculator:
         if form == "list":
             self.formatted_input_sequence = PromptBase.list_to_formatted_OpenAI(input_sequence)
         elif form == "formatted":
-            self.formatted_input_sequence = input_sequence
+            # For formatted input, we expect list[dict[str, str]] but accept list[str] signature
+            # The caller is responsible for passing the correct type
+            self.formatted_input_sequence = input_sequence  # type: ignore[assignment]
         else:
             raise ValueError("Invalid form. Use 'list' or 'formatted'.")
 
@@ -393,7 +388,7 @@ def get_supported_models_pricing() -> dict[str, dict[str, float]]:
     Returns:
         dict: A dictionary with model names as keys and pricing info as values.
     """
-    models = {}
+    models: dict[str, dict[str, float]] = {}
 
     # Add all models with their pricing
     for model in Calculator.GPT_input_pricing:

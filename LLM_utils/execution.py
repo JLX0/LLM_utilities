@@ -3,13 +3,10 @@ import subprocess
 import sys
 import threading
 from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
 
 
 def execute_bash(
-    command: str, print_progress: bool = False, output_dict: Optional[Dict[str, Any]] = None
+    command: str, print_progress: bool = False, output_dict: dict[str, Any] | None = None
 ) -> tuple[int, str]:
     """
     Executes a bash command and returns the return code and combined output.
@@ -40,10 +37,10 @@ def execute_bash(
         env=os.environ.copy(),  # Inherit environment variables
     )
 
-    output_lines: List[str] = []  # Stores all output lines
+    output_lines: list[str] = []  # Stores all output lines
 
     # Function to handle real-time printing and capturing output
-    def handle_output(stream, is_stderr: bool = False):
+    def handle_output(stream: Any, is_stderr: bool = False) -> None:
         for line in iter(stream.readline, ""):  # Read line by line
             output_lines.append(line)  # Capture the line
 

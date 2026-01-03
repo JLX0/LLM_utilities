@@ -11,13 +11,13 @@ Supported models:
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 import json
 import logging
 import os
-import warnings
+import traceback
 from typing import Any
-from typing import Callable
-from typing import Optional
+import warnings
 
 import litellm
 from litellm import completion
@@ -41,10 +41,6 @@ warnings.filterwarnings(
 )
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
-
-# =============================================================================
-# Model Configuration
-# =============================================================================
 
 # Supported model aliases and their LiteLLM model identifiers
 MODEL_ALIASES: dict[str, str] = {
@@ -169,9 +165,9 @@ def check_and_read_key_file(file_path: str, target_key: str) -> Any:
         return -1
 
     try:
-        with open(full_path, "r", encoding="utf-8") as file:
+        with open(full_path, encoding="utf-8") as file:
             data = json.load(file)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return -1
 
     if not isinstance(data, dict):
@@ -226,21 +222,23 @@ class LLMBase:
         reasoning_effort (Optional[str]): Reasoning effort level ("low", "medium", "high").
 
     Example:
-        >>> base_llm = LLMBase(api_key="your-key", model="claude-sonnet-4.5", debug=True)
+        >>> base_llm = LLMBase(
+        ...     api_key="your-key", model="claude-sonnet-4.5", debug=True
+        ... )
         >>> print(base_llm.model)
         'claude-sonnet-4.5'
     """
 
     def __init__(
         self,
-        api_key: Optional[str],
+        api_key: str | None,
         model: str = "claude-sonnet-4.5",
         timeout: float = 60,
         maximum_generation_attempts: int = 3,
         maximum_timeout_attempts: int = 3,
         debug: bool = False,
         max_tokens: int = 8192,
-        reasoning_effort: Optional[str] = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         """
         Initialize the base LLM.
@@ -300,8 +298,8 @@ class LLMBase:
     def ask_base(
         self,
         messages: list[dict[str, str]],
-        ret_dict: Optional[dict[str, Any]] = None,
-    ) -> tuple[Optional[str], float]:
+        ret_dict: dict[str, Any] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Base method to send a message to the LLM. Must be implemented by subclasses.
 
@@ -322,8 +320,8 @@ class LLMBase:
     def ask(
         self,
         messages: list[dict[str, str]],
-        ret_dict: Optional[dict[str, any]] = None,
-    ) -> tuple[Optional[str], float]:
+        ret_dict: dict[str, Any] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Send a message to the LLM with retry functionality for handling timeouts.
 
@@ -331,7 +329,7 @@ class LLMBase:
 
         Args:
             messages (list[dict[str, str]]): The messages to be sent.
-            ret_dict (Optional[dict[str, any]], optional): A dictionary to capture the
+            ret_dict (Optional[dict[str, Any]], optional): A dictionary to capture the
                 method's return value. Defaults to None.
 
         Returns:
@@ -339,13 +337,14 @@ class LLMBase:
                 ("termination_signal", cost) if timeouts are exceeded.
         """
 
-        def target_function(ret_dict: dict[str, Any], *args: Any) -> None:
-            self.ask_base(*args, ret_dict=ret_dict)
+        def target_function(inner_ret_dict: dict[str, Any], *args: Any) -> None:
+            result = self.ask_base(*args)
+            inner_ret_dict["result"] = result
 
         exceeded, result = retry_overtime_kill(
             target_function=target_function,
             target_function_args=(messages,),
-            time_limit=self.timeout,
+            time_limit=int(self.timeout),
             maximum_retry=self.maximum_timeout_attempts,
             ret=True,
         )
@@ -360,7 +359,7 @@ class LLMBase:
     def ask_with_test(
         self,
         messages: list[dict[str, str]],
-        tests: Callable[[str], str],
+        tests: Callable[[str], Any],
     ) -> tuple[Any, float]:
         """
         Send a message with testing function and retry on test failures.
@@ -371,20 +370,18 @@ class LLMBase:
 
         Args:
             messages (list[dict[str, str]]): The messages to send.
-            tests (Callable[[str], str]): A function to test and convert the response.
+            tests (Callable[[str], Any]): A function to test and convert the response.
 
         Returns:
             tuple[Any, float]: The tested/converted response and the accumulated cost,
                 or ("termination_signal", accumulated_cost) if all attempts fail.
         """
-        import traceback
-
         cost_accumulation = 0.0
 
-        def target_function(ret_dict: dict[str, Any], *args: Any) -> None:
-            response, cost = self.ask_base(*args, ret_dict=ret_dict)
-            ret_dict["response"] = response
-            ret_dict["cost"] = cost
+        def target_function(inner_ret_dict: dict[str, Any], *args: Any) -> None:
+            response, cost = self.ask_base(*args)
+            inner_ret_dict["response"] = response
+            inner_ret_dict["cost"] = cost
 
         for trial_count in range(self.maximum_generation_attempts):
             print(
@@ -395,7 +392,7 @@ class LLMBase:
             exceeded, result = retry_overtime_kill(
                 target_function=target_function,
                 target_function_args=(messages,),
-                time_limit=self.timeout,
+                time_limit=int(self.timeout),
                 maximum_retry=self.maximum_timeout_attempts,
                 ret=True,
             )
@@ -404,15 +401,20 @@ class LLMBase:
                 print(f"Inquiry timed out for {self.maximum_timeout_attempts} times, retrying...")
                 continue
 
-            response = result.get("response")
+            response: str | None = result.get("response")
             cost = result.get("cost", 0.0)
             cost_accumulation += cost
 
+            # Check if response is None before calling tests
+            if response is None:
+                print("Response is None, retrying...")
+                continue
+
             try:
-                response = tests(response)
+                tested_response = tests(response)
                 print("Test passed")
-                return response, cost_accumulation
-            except Exception as e:
+                return tested_response, cost_accumulation
+            except Exception:
                 print("Test failed, reason:")
                 print(traceback.format_exc())
                 print("Trying again")
@@ -442,14 +444,14 @@ class LiteLLM_interface(LLMBase):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         model: str = "claude-sonnet-4.5",
         timeout: float = 120,
         maximum_generation_attempts: int = 3,
         maximum_timeout_attempts: int = 5,
         debug: bool = False,
         max_tokens: int = 8192,
-        reasoning_effort: Optional[str] = None,
+        reasoning_effort: str | None = None,
         temperature: float = 0.7,
     ) -> None:
         """
@@ -560,8 +562,8 @@ class LiteLLM_interface(LLMBase):
     def ask_base(
         self,
         messages: list[dict[str, str]],
-        ret_dict: Optional[dict[str, Any]] = None,
-    ) -> tuple[Optional[str], float]:
+        ret_dict: dict[str, Any] | None = None,
+    ) -> tuple[str | None, float]:
         """
         Base method to send a message to the LLM via LiteLLM and capture the response.
 

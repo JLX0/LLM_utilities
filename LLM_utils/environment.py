@@ -1,7 +1,7 @@
 import subprocess
 
 
-def get_conda_packages(environment_name):
+def get_conda_packages(environment_name: str) -> list[str]:
     """Get a list of conda packages for the specified environment."""
     bash_script = f"""#!/bin/bash
 
@@ -22,7 +22,7 @@ def get_conda_packages(environment_name):
         return []
 
 
-def get_pip_packages(environment_name):
+def get_pip_packages(environment_name: str) -> list[str]:
     """Get a list of pip packages for the specified environment."""
     bash_script = f"""#!/bin/bash
 
@@ -43,7 +43,7 @@ def get_pip_packages(environment_name):
         return []
 
 
-def load_packages(environment_name):
+def load_packages(environment_name: str) -> dict[str, str | list[str]]:
     """
     Collect conda and pip packages for the specified environment and return them as a dictionary.
 
@@ -58,7 +58,7 @@ def load_packages(environment_name):
     pip_packages = get_pip_packages(environment_name)
 
     # Organize into a dictionary
-    packages_dict = {
+    packages_dict: dict[str, str | list[str]] = {
         "environment_name": environment_name,  # Add environment_name to the dictionary
         "conda": conda_packages,
         "pip": pip_packages,

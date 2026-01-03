@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
-from typing import Callable
 
 from LLM_utils.environment import load_packages
 
@@ -64,9 +64,7 @@ def resolve_model_name(model: str) -> str:
     canonical = SUPPORTED_MODEL_ALIASES.get(model.lower(), model)
     if canonical not in SUPPORTED_MODELS:
         supported = ", ".join(SUPPORTED_MODELS)
-        raise ValueError(
-            f"Model '{model}' is not supported. Supported models: {supported}"
-        )
+        raise ValueError(f"Model '{model}' is not supported. Supported models: {supported}")
     return canonical
 
 
@@ -150,7 +148,9 @@ class PromptBase:
 
         Example:
             >>> base = PromptBase()
-            >>> result = base.list_to_formatted_OpenAI(["First prompt", "Second prompt"])
+            >>> result = base.list_to_formatted_OpenAI(
+            ...     ["First prompt", "Second prompt"]
+            ... )
             >>> result[0]["content"]
             'First prompt\\nSecond prompt'
         """
@@ -178,7 +178,7 @@ class PromptBase:
             >>> base = PromptBase()
             >>> formatted_prompt = [
             ...     {"role": "system", "content": "First prompt"},
-            ...     {"role": "user", "content": "Second prompt"}
+            ...     {"role": "user", "content": "Second prompt"},
             ... ]
             >>> result = base.formatted_to_string_OpenAI(formatted_prompt)
             >>> print(result)
@@ -246,7 +246,7 @@ class PromptBase:
             >>> current_input = "X_current"
             >>> assembled_input = processor.conversation_prompting(
             ...     sequence_assembler=example_sequence_assembler,
-            ...     current_input=current_input
+            ...     current_input=current_input,
             ... )
             >>> print(assembled_input)
             X0 | X_current | Y1 | Y2
@@ -320,8 +320,8 @@ class PromptBase:
 
     def iterative_prompting(
         self,
-        sequence_assembler: Callable[[str, list[str], list[any]], str],
-        output_evaluator: Callable[[list[str]], list[any]],
+        sequence_assembler: Callable[[str, list[str], list[Any]], str],
+        output_evaluator: Callable[[list[str]], list[Any]],
     ) -> str:
         """
         This method is a template for assembling the prompts for iterative methods for sequence generation. Iterative
@@ -355,18 +355,30 @@ class PromptBase:
             str: The assembled input sequence for the current iteration.
 
         Example:
-            >>> def example_sequence_assembler(initial_input, previous_outputs, evaluations):
-            ...     return initial_input + " | " + " | ".join(previous_outputs) + " | " + " | ".join(map(str, evaluations))
-            ...
+            >>> def example_sequence_assembler(
+            ...     initial_input, previous_outputs, evaluations
+            ... ):
+            ...     return (
+            ...         initial_input
+            ...         + " | "
+            ...         + " | ".join(previous_outputs)
+            ...         + " | "
+            ...         + " | ".join(map(str, evaluations))
+            ...     )
             >>> def example_output_evaluator(outputs):
-            ...     return [len(output) for output in outputs]  # Simple evaluation: output length
+            ...     return [
+            ...         len(output) for output in outputs
+            ...     ]  # Simple evaluation: output length
             ...
             >>> processor = PromptBase()
             >>> processor.input_history = ["X0"]  # Initial input
-            >>> processor.output_history = ["Y1", "Y2"]  # Outputs from previous iterations
+            >>> processor.output_history = [
+            ...     "Y1",
+            ...     "Y2",
+            ... ]  # Outputs from previous iterations
             >>> assembled_input = processor.iterative_prompting(
             ...     sequence_assembler=example_sequence_assembler,
-            ...     output_evaluator=example_output_evaluator
+            ...     output_evaluator=example_output_evaluator,
             ... )
             >>> print(assembled_input)
             X0 | Y1 | Y2 | 2 | 2
@@ -390,8 +402,8 @@ class PromptBase:
 
     def general_interactive_prompting(
         self,
-        sequence_assembler: Callable[[list[str], list[str], list[list[any], list[any]]], str],
-        general_evaluator: Callable[[list[str], list[str]], list[list[any], list[any]]],
+        sequence_assembler: Callable[[list[str], list[str], list[list[Any]]], str],
+        general_evaluator: Callable[[list[str], list[str]], list[list[Any]]],
         current_input: str,
     ) -> str:
         """
@@ -436,7 +448,15 @@ class PromptBase:
         Example:
             >>> def example_sequence_assembler(inputs, past_outputs, evaluations):
             ...     inputs_eval, outputs_eval = evaluations
-            ...     return " | ".join(inputs) + " | " + " | ".join(past_outputs) + " | " + " | ".join(map(str, inputs_eval)) + " | " + " | ".join(map(str, outputs_eval))
+            ...     return (
+            ...         " | ".join(inputs)
+            ...         + " | "
+            ...         + " | ".join(past_outputs)
+            ...         + " | "
+            ...         + " | ".join(map(str, inputs_eval))
+            ...         + " | "
+            ...         + " | ".join(map(str, outputs_eval))
+            ...     )
             ...
             >>> def example_general_evaluator(inputs, outputs):
             ...     inputs_eval = [len(inp) for inp in inputs]
@@ -445,12 +465,15 @@ class PromptBase:
             ...
             >>> processor = PromptBase()
             >>> processor.input_history = ["X0"]  # Initial input history
-            >>> processor.output_history = ["Y1", "Y2"]  # Outputs from previous iterations
+            >>> processor.output_history = [
+            ...     "Y1",
+            ...     "Y2",
+            ... ]  # Outputs from previous iterations
             >>> current_input = "X_current"
             >>> assembled_input = processor.general_interactive_prompting(
             ...     sequence_assembler=example_sequence_assembler,
             ...     general_evaluator=example_general_evaluator,
-            ...     current_input=current_input
+            ...     current_input=current_input,
             ... )
             >>> print(assembled_input)
             X0 | X_current | Y1 | Y2 | 2 | 9 | 2 | 2
@@ -492,15 +515,17 @@ def available_packages_prompt(environment_name: str) -> list[str]:
     ]
 
     # Add conda packages to the prompt (only if there are conda packages)
-    if packages["conda"]:
+    conda_packages = packages["conda"]
+    if isinstance(conda_packages, list) and conda_packages:
         prompt_string.append("Conda packages:")
-        prompt_string.append(", ".join(packages["conda"]))
+        prompt_string.append(", ".join(conda_packages))
         prompt_string.append("")
 
     # Add pip packages to the prompt (only if there are pip packages)
-    if packages["pip"]:
+    pip_packages = packages["pip"]
+    if isinstance(pip_packages, list) and pip_packages:
         prompt_string.append("Pip packages:")
-        prompt_string.append(", ".join(packages["pip"]))
+        prompt_string.append(", ".join(pip_packages))
         prompt_string.append("")
 
     # Remove the last newline if it exists

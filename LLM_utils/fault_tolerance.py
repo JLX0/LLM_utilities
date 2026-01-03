@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import multiprocessing
 from typing import Any
-from typing import Callable
-from typing import Optional
 from typing import TypeVar
 import warnings
 
@@ -16,7 +15,7 @@ R = TypeVar("R")
 def overtime_kill(
     target_function: Callable[..., Any],
     target_function_args: tuple[Any, ...] | None = None,
-    time_limit: int = 60,
+    time_limit: int | float = 60,
     ret: bool = True,
 ) -> tuple[bool, dict[str, Any]]:
     """
@@ -85,7 +84,7 @@ def overtime_kill(
 def retry_overtime_kill(
     target_function: Callable[..., Any],
     target_function_args: tuple[Any, ...] | None = None,
-    time_limit: int = 60,
+    time_limit: int | float = 60,
     maximum_retry: int = 3,
     ret: bool = True,
 ) -> tuple[bool, dict[str, Any]]:
@@ -138,10 +137,10 @@ def retry_overtime_kill(
 
 
 def retry_overtime_decorator(
-    time_limit: int = 60,
+    time_limit: int | float = 60,
     maximum_retry: int = 3,
     ret: bool = True,
-) -> Callable[[Callable[..., R]], Callable[..., Optional[R]]]:
+) -> Callable[[Callable[..., R]], Callable[..., R | None]]:
     """
     Create a decorator that adds timeout and retry functionality to a function.
 
@@ -175,8 +174,8 @@ def retry_overtime_decorator(
         42
     """
 
-    def decorator(target_function: Callable[..., R]) -> Callable[..., Optional[R]]:
-        def wrapper(*args: Any, **kwargs: Any) -> Optional[R]:
+    def decorator(target_function: Callable[..., R]) -> Callable[..., R | None]:
+        def wrapper(*args: Any, **kwargs: Any) -> R | None:
             # Handle class methods vs regular functions
             if args and hasattr(args[0], "__class__"):
                 self_instance = args[0]

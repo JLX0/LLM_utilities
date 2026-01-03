@@ -1,16 +1,22 @@
+from collections.abc import Callable
 import json
 import os
+from typing import Any
+from typing import TypeVar
+
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class Storage_base:
     """This class is used to read and write information in a json file"""
 
-    def __init__(self, path, debug=False):
+    def __init__(self, path: str, debug: bool = False) -> None:
         self.path = path
-        self.information = {}
+        self.information: dict[str, Any] = {}
         self.debug = debug
 
-    def load_info(self):
+    def load_info(self) -> None:
         """
         This method loads the information from a json file.
 
@@ -21,15 +27,15 @@ class Storage_base:
         """
 
         try:
-            with open(self.path, "r") as file:
+            with open(self.path) as file:
                 self.information = json.load(file)
             if self.debug:
                 print(f"Information is loaded from {self.path}.")
-        except:
+        except Exception:
             if self.debug:
                 print(f"No existing stored information is found in {self.path}.")
 
-    def save_info(self):
+    def save_info(self) -> None:
         """
         This method saves the information to a JSON file in a nicely formatted way.
 
@@ -44,22 +50,22 @@ class Storage_base:
             print(f"Information is saved to {self.path}.")
 
     @classmethod
-    def auto_load_save(cls, method):
+    def auto_load_save(cls, method: F) -> F:
         """
         Decorator to automatically call self.load_info() before the method
         and self.save_info() after the method.
         """
 
-        def wrapper(self, *args, **kwargs):
+        def wrapper(self: "Storage_base", *args: Any, **kwargs: Any) -> Any:
             self.load_info()
             result = method(self, *args, **kwargs)
             self.save_info()
             return result
 
-        return wrapper
+        return wrapper  # type: ignore[return-value]
 
 
-def save_python_code(python_code, file_path):
+def save_python_code(python_code: str, file_path: str) -> None:
     # Extract the directory path from the file_path
     directory = os.path.dirname(file_path)
 
