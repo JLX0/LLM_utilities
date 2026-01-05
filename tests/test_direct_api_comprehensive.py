@@ -10,12 +10,11 @@ Run with: pytest tests/test_direct_api_comprehensive.py -v -s
 from __future__ import annotations
 
 import os
+import pytest
 import time
 
-import pytest
-
-from LLM_utils.inquiry import _check_tenacity_available
-from LLM_utils.inquiry import LiteLLM_interface
+from LLM_utils.inquiry import LiteLLM_interface, _check_tenacity_available
+from LLM_utils.cost import Calculator
 
 
 # =============================================================================
@@ -144,7 +143,7 @@ class TestOpenAIDirectComprehensive:
             model="gpt-5.2",
             force_direct=True,
             debug=True,
-            max_tokens=200,
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
@@ -160,7 +159,7 @@ class TestOpenAIDirectComprehensive:
             model="gpt-5.2",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
@@ -237,7 +236,7 @@ class TestAnthropicDirectComprehensive:
             model="claude-sonnet-4.5",
             force_direct=True,
             debug=True,
-            max_tokens=300,
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
@@ -253,7 +252,7 @@ class TestAnthropicDirectComprehensive:
             model="claude-sonnet-4.5",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -269,7 +268,7 @@ class TestAnthropicDirectComprehensive:
             model="claude-sonnet-4.5",
             force_direct=True,
             debug=True,
-            max_tokens=800,
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
@@ -301,11 +300,7 @@ class TestAnthropicDirectComprehensive:
 
 
 class TestGeminiDirectComprehensive:
-    """Comprehensive tests for Gemini direct API.
-
-    Note: Gemini 3 Pro cannot disable thinking/reasoning - it's always active.
-    The interface defaults to reasoning_effort='high' for Gemini models.
-    """
+    """Comprehensive tests for Gemini direct API."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -314,21 +309,15 @@ class TestGeminiDirectComprehensive:
             pytest.skip("GEMINI_API_KEY not set")
 
     def test_simple_completion(self):
-        """Test simple completion.
-
-        Note: Gemini always uses reasoning, so we need sufficient max_tokens.
-        The interface auto-defaults to reasoning_effort='high'.
-        """
+        """Test simple completion."""
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=300,  # Increased for reasoning + response
+            max_tokens=50,
         )
 
         # Gemini should always be direct
         assert llm.use_openrouter is False
-        # Should auto-default to reasoning_effort='high'
-        assert llm.reasoning_effort == "high"
 
         response, cost = llm.ask_base(SIMPLE_PROMPT)
 
@@ -343,7 +332,7 @@ class TestGeminiDirectComprehensive:
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=300,  # Increased for reasoning + response
+            max_tokens=50,
         )
 
         response, cost = llm.ask_base(MATH_PROMPT)
@@ -359,14 +348,14 @@ class TestGeminiDirectComprehensive:
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=500,  # Sufficient for reasoning + response
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
         response, cost = llm.ask_base(REASONING_PROMPT)
 
         if response is None:
-            pytest.skip("Gemini reasoning with effort=low returned None (may need more tokens)")
+            pytest.skip("Gemini reasoning with effort=low returned None (may not be supported)")
 
         assert "9" in response
         print(f"Response: {response}")
@@ -376,14 +365,14 @@ class TestGeminiDirectComprehensive:
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=800,  # More tokens for high reasoning
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
         response, cost = llm.ask_base(REASONING_PROMPT)
 
         if response is None:
-            pytest.skip("Gemini reasoning with effort=high returned None (may need more tokens)")
+            pytest.skip("Gemini reasoning with effort=high returned None (may not be supported)")
 
         assert "9" in response
         print(f"Response: {response}")
@@ -393,7 +382,7 @@ class TestGeminiDirectComprehensive:
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=800,  # Increased for code + reasoning
+            max_tokens=4000,
         )
 
         response, cost = llm.ask_base(CODE_PROMPT)
@@ -414,7 +403,7 @@ class TestGeminiDirectComprehensive:
             llm = LiteLLM_interface(
                 model="gemini-pro-3.0",
                 debug=True,
-                max_tokens=300,
+                max_tokens=50,
             )
 
             assert llm.use_openrouter is False
@@ -426,15 +415,14 @@ class TestGeminiDirectComprehensive:
                 del os.environ["OPENROUTER_API_KEY"]
 
     def test_default_reasoning_effort(self):
-        """Test that Gemini defaults to reasoning_effort='high' when not specified."""
+        """Test that Gemini defaults to high reasoning effort."""
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=300,
-            # reasoning_effort not specified
+            max_tokens=50,
         )
 
-        # Should auto-default to 'high'
+        # The default should be set to 'high' for Gemini
         assert llm.reasoning_effort == "high"
 
 
@@ -504,7 +492,7 @@ class TestDeepSeekDirectComprehensive:
             model="deepseek-v3.2",
             force_direct=True,
             debug=True,
-            max_tokens=400,
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
@@ -520,7 +508,7 @@ class TestDeepSeekDirectComprehensive:
             model="deepseek-v3.2",
             force_direct=True,
             debug=True,
-            max_tokens=800,
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
@@ -557,22 +545,22 @@ class TestCrossProviderComparison:
     def test_all_providers_answer_same_question(self, check_all_direct_keys, ensure_no_openrouter):
         """Test that all providers can answer the same question."""
         models = [
-            ("gpt-5.2", "openai", 100),
-            ("claude-sonnet-4.5", "anthropic", 100),
-            ("gemini-pro-3.0", "gemini", 300),  # More tokens for Gemini
-            ("deepseek-v3.2", "deepseek", 100),
+            ("gpt-5.2", "openai"),
+            ("claude-sonnet-4.5", "anthropic"),
+            ("gemini-pro-3.0", "gemini"),
+            ("deepseek-v3.2", "deepseek"),
         ]
 
         results = {}
 
-        for model, provider, max_tokens in models:
+        for model, provider in models:
             print(f"\nTesting {model} ({provider})...")
 
             llm = LiteLLM_interface(
                 model=model,
                 force_direct=True,
                 debug=True,
-                max_tokens=max_tokens,
+                max_tokens=100,
             )
 
             start_time = time.time()
@@ -596,33 +584,33 @@ class TestCrossProviderComparison:
         print("=" * 70)
         for model, result in results.items():
             status = "✓" if result["success"] else "✗"
-            print(f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s")
+            print(
+                f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s"
+            )
 
         # All should succeed
         for model, result in results.items():
             assert result["success"], f"{model} failed to correctly answer"
 
-    def test_reasoning_across_providers(
-        self, check_all_direct_keys, ensure_no_openrouter, check_tenacity
-    ):
+    def test_reasoning_across_providers(self, check_all_direct_keys, ensure_no_openrouter, check_tenacity):
         """Test reasoning mode across all providers."""
         models = [
-            ("gpt-5.2", "openai", 400),
-            ("claude-sonnet-4.5", "anthropic", 400),
-            ("gemini-pro-3.0", "gemini", 600),  # More tokens for Gemini reasoning
-            ("deepseek-v3.2", "deepseek", 400),
+            ("gpt-5.2", "openai"),
+            ("claude-sonnet-4.5", "anthropic"),
+            ("gemini-pro-3.0", "gemini"),
+            ("deepseek-v3.2", "deepseek"),
         ]
 
         results = {}
 
-        for model, provider, max_tokens in models:
+        for model, provider in models:
             print(f"\nTesting {model} ({provider}) with reasoning...")
 
             llm = LiteLLM_interface(
                 model=model,
                 force_direct=True,
                 debug=True,
-                max_tokens=max_tokens,
+                max_tokens=30000,
                 reasoning_effort="medium",
             )
 
@@ -647,7 +635,9 @@ class TestCrossProviderComparison:
         print("=" * 70)
         for model, result in results.items():
             status = "✓" if result["success"] else "✗"
-            print(f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s")
+            print(
+                f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s"
+            )
 
         # All should succeed (except Gemini which may not support all reasoning modes)
         for model, result in results.items():

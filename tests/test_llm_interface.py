@@ -14,16 +14,21 @@ Run with: pytest tests/test_llm_interface.py -v -s
 from __future__ import annotations
 
 import os
-
 import pytest
 
-from LLM_utils.cost import Calculator
-from LLM_utils.cost import get_supported_models_pricing
-from LLM_utils.inquiry import _check_tenacity_available
-from LLM_utils.inquiry import _get_litellm_model_id
-from LLM_utils.inquiry import _is_gemini_model
-from LLM_utils.inquiry import _resolve_to_canonical
-from LLM_utils.inquiry import LiteLLM_interface
+from LLM_utils.inquiry import (
+    LiteLLM_interface,
+    get_supported_models,
+    MODEL_ALIASES,
+    DIRECT_MODEL_MAPPINGS,
+    OPENROUTER_MODEL_MAPPINGS,
+    _has_openrouter_key,
+    _is_gemini_model,
+    _resolve_to_canonical,
+    _get_litellm_model_id,
+    _check_tenacity_available,
+)
+from LLM_utils.cost import Calculator, get_supported_models_pricing
 
 
 # =============================================================================
@@ -128,7 +133,7 @@ def print_response_info(
     model: str, routing: str, response_text: str | None, cost: float, reasoning: str | None = None
 ) -> None:
     """Print response information for debugging."""
-    print(f"\n{'=' * 60}")
+    print(f"\n{'='*60}")
     print(f"Model: {model}")
     print(f"Routing: {routing}")
     if reasoning:
@@ -138,7 +143,7 @@ def print_response_info(
         print(f"Response preview: {response_text[:100]}...")
     else:
         print("Response: None")
-    print(f"{'=' * 60}")
+    print(f"{'='*60}")
 
 
 # =============================================================================
@@ -176,8 +181,7 @@ class TestHelperFunctions:
             == "gemini/gemini-3-pro-preview"
         )
         assert (
-            _get_litellm_model_id("deepseek-v3.2", use_openrouter=False)
-            == "deepseek/deepseek-chat"
+            _get_litellm_model_id("deepseek-v3.2", use_openrouter=False) == "deepseek/deepseek-chat"
         )
 
     def test_get_litellm_model_id_openrouter(self):
@@ -186,7 +190,9 @@ class TestHelperFunctions:
             _get_litellm_model_id("claude-sonnet-4.5", use_openrouter=True)
             == "openrouter/anthropic/claude-sonnet-4.5"
         )
-        assert _get_litellm_model_id("gpt-5.2", use_openrouter=True) == "openrouter/openai/gpt-5.2"
+        assert (
+            _get_litellm_model_id("gpt-5.2", use_openrouter=True) == "openrouter/openai/gpt-5.2"
+        )
         # Gemini always uses direct, even when OpenRouter is requested
         assert (
             _get_litellm_model_id("gemini-pro-3.0", use_openrouter=True)
@@ -241,7 +247,7 @@ class TestDirectAPIOpenAI:
             model="gpt-5.2",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -271,15 +277,13 @@ class TestDirectAPIAnthropic:
         validate_response((response_text, cost))
         print_response_info("claude-sonnet-4.5", "direct", response_text, cost)
 
-    def test_claude_direct_thinking(
-        self, check_anthropic_key, clear_openrouter_key, check_tenacity
-    ):
+    def test_claude_direct_thinking(self, check_anthropic_key, clear_openrouter_key, check_tenacity):
         """Test Claude Sonnet 4.5 direct API with thinking/reasoning."""
         llm = LiteLLM_interface(
             model="claude-sonnet-4.5",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -291,25 +295,19 @@ class TestDirectAPIAnthropic:
 
 
 class TestDirectAPIGemini:
-    """Test direct Gemini API calls.
-
-    Note: Gemini 3 Pro cannot disable thinking - it's always active.
-    The interface defaults to reasoning_effort='high' for Gemini models.
-    """
+    """Test direct Gemini API calls."""
 
     def test_gemini_direct_simple(self, check_gemini_key):
         """Test Gemini Pro 3.0 direct API with simple prompt."""
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=300,  # Increased for reasoning + response
+            max_tokens=100,
         )
 
         # Gemini should always use direct, regardless of OpenRouter key
         assert llm.use_openrouter is False
         assert "gemini/" in llm.resolved_model
-        # Should auto-default to 'high' reasoning
-        assert llm.reasoning_effort == "high"
 
         response_text, cost = llm.ask_base(SIMPLE_PROMPT)
 
@@ -325,7 +323,7 @@ class TestDirectAPIGemini:
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=800,  # Increased for reasoning
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -335,20 +333,16 @@ class TestDirectAPIGemini:
         # Gemini reasoning may not be fully supported, allow None
         if response_text is not None:
             validate_response((response_text, cost))
-            print_response_info(
-                "gemini-pro-3.0", "direct", response_text, cost, reasoning="medium"
-            )
+            print_response_info("gemini-pro-3.0", "direct", response_text, cost, reasoning="medium")
         else:
             pytest.skip("Gemini reasoning returned None (may need more tokens)")
 
-    def test_gemini_always_direct_even_with_openrouter_key(
-        self, check_gemini_key, check_openrouter_key
-    ):
+    def test_gemini_always_direct_even_with_openrouter_key(self, check_gemini_key, check_openrouter_key):
         """Test that Gemini always uses direct API even when OpenRouter key is available."""
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=300,  # Increased for reasoning + response
+            max_tokens=100,
         )
 
         # Should still be direct despite OpenRouter key being available
@@ -390,7 +384,7 @@ class TestDirectAPIDeepSeek:
             model="deepseek-v3.2",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -400,9 +394,7 @@ class TestDirectAPIDeepSeek:
 
         response_text, cost = llm.ask_base(REASONING_PROMPT)
         validate_response((response_text, cost))
-        print_response_info(
-            "deepseek-v3.2", "direct (thinking)", response_text, cost, reasoning="medium"
-        )
+        print_response_info("deepseek-v3.2", "direct (thinking)", response_text, cost, reasoning="medium")
 
 
 # =============================================================================
@@ -463,7 +455,7 @@ class TestOpenRouterAPI:
         llm = LiteLLM_interface(
             model="gpt-5.2",
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -478,7 +470,7 @@ class TestOpenRouterAPI:
         llm = LiteLLM_interface(
             model="claude-sonnet-4.5",
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -486,16 +478,14 @@ class TestOpenRouterAPI:
 
         response_text, cost = llm.ask_base(REASONING_PROMPT)
         validate_response((response_text, cost))
-        print_response_info(
-            "claude-sonnet-4.5", "openrouter", response_text, cost, reasoning="medium"
-        )
+        print_response_info("claude-sonnet-4.5", "openrouter", response_text, cost, reasoning="medium")
 
     def test_openrouter_deepseek_reasoning(self, check_openrouter_key):
         """Test DeepSeek V3.2 via OpenRouter with reasoning."""
         llm = LiteLLM_interface(
             model="deepseek-v3.2",
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -661,41 +651,23 @@ class TestModelAliases:
 
 
 class TestGeminiDefaultReasoning:
-    """Test Gemini-specific default reasoning behavior."""
+    """Test Gemini default reasoning effort behavior."""
 
     def test_gemini_defaults_to_high_reasoning(self):
-        """Test that Gemini defaults to reasoning_effort='high' when not specified."""
-        llm = LiteLLM_interface(
-            model="gemini-pro-3.0",
-            debug=True,
-            max_tokens=300,
-            # reasoning_effort not specified
-        )
-
+        """Test that Gemini defaults to high reasoning effort."""
+        llm = LiteLLM_interface(model="gemini-pro-3.0", debug=True)
         assert llm.reasoning_effort == "high"
-        assert llm.canonical_model == "gemini-pro-3.0"
 
     def test_gemini_respects_explicit_low_reasoning(self):
-        """Test that Gemini respects explicitly set low reasoning effort."""
-        llm = LiteLLM_interface(
-            model="gemini-pro-3.0",
-            debug=True,
-            max_tokens=500,
-            reasoning_effort="low",  # Explicitly set
-        )
-
+        """Test that Gemini respects explicit low reasoning effort."""
+        llm = LiteLLM_interface(model="gemini-pro-3.0", reasoning_effort="low", debug=True)
         assert llm.reasoning_effort == "low"
 
     def test_non_gemini_does_not_default_reasoning(self):
-        """Test that non-Gemini models don't get default reasoning."""
-        llm_gpt = LiteLLM_interface(model="gpt-5.2", debug=True)
-        assert llm_gpt.reasoning_effort is None
-
-        llm_claude = LiteLLM_interface(model="claude-sonnet-4.5", debug=True)
-        assert llm_claude.reasoning_effort is None
-
-        llm_deepseek = LiteLLM_interface(model="deepseek-v3.2", debug=True)
-        assert llm_deepseek.reasoning_effort is None
+        """Test that non-Gemini models don't default to reasoning."""
+        for model in ["gpt-5.2", "claude-sonnet-4.5", "deepseek-v3.2"]:
+            llm = LiteLLM_interface(model=model, debug=True)
+            assert llm.reasoning_effort is None
 
 
 # =============================================================================
@@ -745,21 +717,12 @@ class TestFullPipeline:
         """Test that all supported models respond successfully."""
         results = {}
 
-        # Use different max_tokens for Gemini due to reasoning requirements
-        model_configs = {
-            "claude-sonnet-4.5": {"max_tokens": 100},
-            "gpt-5.2": {"max_tokens": 100},
-            "gemini-pro-3.0": {"max_tokens": 300},  # More tokens for Gemini
-            "deepseek-v3.2": {"max_tokens": 100},
-        }
-
         for model in TEST_MODELS:
             print(f"\nTesting {model}...")
-            config = model_configs.get(model, {"max_tokens": 100})
             llm = LiteLLM_interface(
                 model=model,
                 debug=True,
-                **config,
+                max_tokens=100,
             )
 
             response_text, cost = llm.ask_base(SIMPLE_PROMPT)
@@ -792,9 +755,7 @@ class TestFullPipeline:
             if not result["success"]:
                 if model == "gemini-pro-3.0":
                     # Gemini can be flaky, just warn
-                    print(
-                        f"Warning: {model} failed (Gemini API can be intermittently unavailable)"
-                    )
+                    print(f"Warning: {model} failed (Gemini API can be intermittently unavailable)")
                 else:
                     failed_models.append(model)
 
@@ -811,15 +772,13 @@ class TestReasoningEffortLevels:
     """Test different reasoning effort levels."""
 
     @pytest.mark.parametrize("effort", ["low", "medium", "high"])
-    def test_claude_reasoning_levels(
-        self, check_anthropic_key, clear_openrouter_key, check_tenacity, effort: str
-    ):
+    def test_claude_reasoning_levels(self, check_anthropic_key, clear_openrouter_key, check_tenacity, effort: str):
         """Test Claude with different reasoning effort levels (direct)."""
         llm = LiteLLM_interface(
             model="claude-sonnet-4.5",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort=effort,
         )
 
@@ -834,7 +793,7 @@ class TestReasoningEffortLevels:
             model="gpt-5.2",
             force_direct=True,
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort=effort,
         )
 
@@ -842,13 +801,13 @@ class TestReasoningEffortLevels:
         validate_response((response_text, cost))
         print_response_info("gpt-5.2", "direct", response_text, cost, reasoning=effort)
 
-    @pytest.mark.parametrize("effort", ["low", "high"])  # Gemini 3 Pro only supports low/high
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
     def test_gemini_reasoning_levels(self, check_gemini_key, effort: str):
         """Test Gemini with different reasoning effort levels."""
         llm = LiteLLM_interface(
             model="gemini-pro-3.0",
             debug=True,
-            max_tokens=800,  # Increased for reasoning
+            max_tokens=30000,
             reasoning_effort=effort,
         )
 
@@ -858,9 +817,7 @@ class TestReasoningEffortLevels:
             validate_response((response_text, cost))
             print_response_info("gemini-pro-3.0", "direct", response_text, cost, reasoning=effort)
         else:
-            pytest.skip(
-                f"Gemini reasoning with effort={effort} returned None (may need more tokens)"
-            )
+            pytest.skip(f"Gemini reasoning with effort={effort} returned None (may not be supported)")
 
 
 # =============================================================================

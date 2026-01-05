@@ -437,7 +437,9 @@ class Calculator:
             return input_sequence
 
 
-def get_supported_models_pricing(use_openrouter: bool = False) -> dict[str, dict[str, float]]:
+def get_supported_models_pricing(
+    use_openrouter: bool = False,
+) -> dict[str, dict[str, float | str]]:
     """
     Get pricing information for all supported models.
 
@@ -446,8 +448,10 @@ def get_supported_models_pricing(use_openrouter: bool = False) -> dict[str, dict
 
     Returns:
         dict: A dictionary with model names as keys and pricing info as values.
+            Each value dict contains 'input_per_1m' (float), 'output_per_1m' (float),
+            and 'routing' (str).
     """
-    models: dict[str, dict[str, float]] = {}
+    models: dict[str, dict[str, float | str]] = {}
 
     if use_openrouter:
         # OpenRouter pricing

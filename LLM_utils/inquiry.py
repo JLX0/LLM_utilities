@@ -147,7 +147,7 @@ API_KEY_ENV_VARS: dict[str, str] = {
 }
 
 # Minimum max_tokens for Gemini models to ensure room for both reasoning and response
-GEMINI_MIN_MAX_TOKENS = 200
+GEMINI_MIN_MAX_TOKENS = 2048
 
 
 # =============================================================================
@@ -867,7 +867,10 @@ class LiteLLM_interface(LLMBase):
             api_params: The API parameters dict to modify
             provider: The provider identifier
         """
+        # At this point, self.reasoning_effort is guaranteed to be non-None and valid
+        # because this method is only called when reasoning_effort is in VALID_EFFORTS
         effort = self.reasoning_effort
+        assert effort is not None, "reasoning_effort must not be None when calling this method"
 
         if provider == "openrouter":
             # OpenRouter routing - handle based on sub-provider
@@ -911,6 +914,7 @@ class LiteLLM_interface(LLMBase):
                 # Increase max_tokens to accommodate thinking tokens + response
                 current_max = api_params.get("max_tokens", 8192)
                 api_params["max_tokens"] = max(current_max, token_budget + 1000)
+                api_params["temperature"] = 1.0  # Required for Anthropic thinking
                 api_params["drop_params"] = False
 
         elif provider == "deepseek":

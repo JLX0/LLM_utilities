@@ -9,12 +9,11 @@ Run with: pytest tests/test_openrouter_comprehensive.py -v -s
 from __future__ import annotations
 
 import os
+import pytest
 import time
 
-import pytest
-
-from LLM_utils.inquiry import _check_tenacity_available
-from LLM_utils.inquiry import LiteLLM_interface
+from LLM_utils.inquiry import LiteLLM_interface, _check_tenacity_available
+from LLM_utils.cost import Calculator
 
 
 # =============================================================================
@@ -97,53 +96,47 @@ class TestOpenRouterGPT:
         print(f"Response: {response}, Cost: ${cost:.6f}")
 
     def test_reasoning_low(self):
-        """Test GPT with low reasoning effort via OpenRouter."""
+        """Test with low reasoning effort via OpenRouter."""
         llm = LiteLLM_interface(
             model="gpt-5.2",
             debug=True,
-            max_tokens=300,
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
         response, cost = llm.ask_base(REASONING_PROMPT)
 
-        if response is None:
-            pytest.skip("GPT reasoning via OpenRouter returned None")
-
+        assert response is not None
         assert "9" in response
         print(f"Response: {response}")
 
     def test_reasoning_medium(self):
-        """Test GPT with medium reasoning effort via OpenRouter."""
+        """Test with medium reasoning effort via OpenRouter."""
         llm = LiteLLM_interface(
             model="gpt-5.2",
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
         response, cost = llm.ask_base(REASONING_PROMPT)
 
-        if response is None:
-            pytest.skip("GPT reasoning via OpenRouter returned None")
-
+        assert response is not None
         assert "9" in response
         print(f"Response: {response}")
 
     def test_reasoning_high(self):
-        """Test GPT with high reasoning effort via OpenRouter."""
+        """Test with high reasoning effort via OpenRouter."""
         llm = LiteLLM_interface(
             model="gpt-5.2",
             debug=True,
-            max_tokens=800,
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
         response, cost = llm.ask_base(REASONING_PROMPT)
 
-        if response is None:
-            pytest.skip("GPT reasoning via OpenRouter returned None")
-
+        assert response is not None
         assert "9" in response
         print(f"Response: {response}")
 
@@ -197,7 +190,7 @@ class TestOpenRouterClaude:
         llm = LiteLLM_interface(
             model="claude-sonnet-4.5",
             debug=True,
-            max_tokens=2000,  # Increased to accommodate thinking tokens
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
@@ -214,7 +207,7 @@ class TestOpenRouterClaude:
         llm = LiteLLM_interface(
             model="claude-sonnet-4.5",
             debug=True,
-            max_tokens=3000,  # Increased to accommodate thinking tokens
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -231,7 +224,7 @@ class TestOpenRouterClaude:
         llm = LiteLLM_interface(
             model="claude-sonnet-4.5",
             debug=True,
-            max_tokens=5000,  # Increased to accommodate thinking tokens
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
@@ -293,7 +286,7 @@ class TestOpenRouterDeepSeek:
         llm = LiteLLM_interface(
             model="deepseek-v3.2",
             debug=True,
-            max_tokens=300,
+            max_tokens=30000,
             reasoning_effort="low",
         )
 
@@ -308,7 +301,7 @@ class TestOpenRouterDeepSeek:
         llm = LiteLLM_interface(
             model="deepseek-v3.2",
             debug=True,
-            max_tokens=500,
+            max_tokens=30000,
             reasoning_effort="medium",
         )
 
@@ -323,7 +316,7 @@ class TestOpenRouterDeepSeek:
         llm = LiteLLM_interface(
             model="deepseek-v3.2",
             debug=True,
-            max_tokens=800,
+            max_tokens=30000,
             reasoning_effort="high",
         )
 
@@ -384,7 +377,9 @@ class TestOpenRouterComparison:
         print("=" * 70)
         for model, result in results.items():
             status = "✓" if result["success"] else "✗"
-            print(f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s")
+            print(
+                f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s"
+            )
 
         # All should succeed
         for model, result in results.items():
@@ -398,13 +393,10 @@ class TestOpenRouterComparison:
         for model in models:
             print(f"\nTesting {model} reasoning via OpenRouter...")
 
-            # Claude needs more tokens for thinking
-            max_tokens = 3000 if "claude" in model else 500
-
             llm = LiteLLM_interface(
                 model=model,
                 debug=True,
-                max_tokens=max_tokens,
+                max_tokens=30000,
                 reasoning_effort="medium",
             )
 
@@ -429,7 +421,9 @@ class TestOpenRouterComparison:
         print("=" * 70)
         for model, result in results.items():
             status = "✓" if result["success"] else "✗"
-            print(f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s")
+            print(
+                f"  {status} {model}: cost=${result['cost']:.6f}, time={result['time']:.2f}s"
+            )
 
 
 # =============================================================================
@@ -458,7 +452,7 @@ class TestOpenRouterVsDirectComparison:
         results = {}
 
         for model in models_to_test:
-            print(f"\n{'=' * 60}")
+            print(f"\n{'='*60}")
             print(f"Comparing {model}:")
             print("=" * 60)
 
@@ -474,9 +468,7 @@ class TestOpenRouterVsDirectComparison:
             response_or, cost_or = llm_or.ask_base(MATH_PROMPT)
             time_or = time.time() - start_time
 
-            print(
-                f"  OpenRouter: response='{response_or}', cost=${cost_or:.6f}, time={time_or:.2f}s"
-            )
+            print(f"  OpenRouter: response='{response_or}', cost=${cost_or:.6f}, time={time_or:.2f}s")
 
             # Test via Direct API
             llm_direct = LiteLLM_interface(
@@ -491,9 +483,7 @@ class TestOpenRouterVsDirectComparison:
             response_direct, cost_direct = llm_direct.ask_base(MATH_PROMPT)
             time_direct = time.time() - start_time
 
-            print(
-                f"  Direct:     response='{response_direct}', cost=${cost_direct:.6f}, time={time_direct:.2f}s"
-            )
+            print(f"  Direct:     response='{response_direct}', cost=${cost_direct:.6f}, time={time_direct:.2f}s")
 
             results[model] = {
                 "openrouter": {
@@ -518,9 +508,7 @@ class TestOpenRouterVsDirectComparison:
             or_status = "✓" if result["openrouter"]["success"] else "✗"
             direct_status = "✓" if result["direct"]["success"] else "✗"
             cost_diff = result["openrouter"]["cost"] - result["direct"]["cost"]
-            cost_pct = (
-                (cost_diff / result["direct"]["cost"] * 100) if result["direct"]["cost"] > 0 else 0
-            )
+            cost_pct = (cost_diff / result["direct"]["cost"] * 100) if result["direct"]["cost"] > 0 else 0
 
             print(f"  {model}:")
             print(f"    OpenRouter: {or_status} ${result['openrouter']['cost']:.6f}")
