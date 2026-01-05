@@ -84,14 +84,14 @@ When `reasoning_effort` is specified ("low", "medium", or "high"):
 - **OpenAI via OpenRouter**: Uses `reasoning={"effort": <level>}` object with `temperature=1.0`.
 - **Anthropic Direct**: Uses native `thinking` parameter with `budget_tokens` and `temperature=1.0` (required for thinking mode). Automatically increases `max_tokens` by `budget_tokens + 1000` to accommodate both thinking and response.
 - **Anthropic via OpenRouter**: Uses `reasoning={"max_tokens": X}` since OpenRouter doesn't support the `thinking` parameter directly. Also increases `max_tokens`. Does not set temperature.
-- **Gemini**: Cannot disable thinking/reasoning (always active). Defaults to `reasoning_effort="high"` if not specified. Minimum `max_tokens=200` enforced. Temperature is not supported with Gemini reasoning. `drop_params=False` is always set.
+- **Gemini**: Cannot disable thinking/reasoning (always active). Defaults to `reasoning_effort="high"` if not specified. Minimum `max_tokens=2048` enforced. Temperature is not supported with Gemini reasoning. `drop_params=False` is always set.
 - **DeepSeek Direct**: Reasoning is enabled by switching to the `deepseek-reasoner` model rather than passing parameters.
 - **DeepSeek via OpenRouter**: Uses `reasoning={"enabled": True, "max_tokens": X}` object.
 
 **Gemini-Specific Behavior:**
 - Gemini 3 Pro **cannot disable thinking** - reasoning tokens are always used
 - If `reasoning_effort` is not specified, it defaults to `"high"`
-- Minimum `max_tokens` of 200 is enforced to ensure room for both reasoning and response
+- Minimum `max_tokens` of 2048 is enforced to ensure room for both reasoning and response
 
 **Token Budget Mapping (for Anthropic/DeepSeek):**
 
@@ -117,7 +117,7 @@ When `reasoning_effort` is specified ("low", "medium", or "high"):
 3. Map canonical name to provider-specific model ID
 4. **For Gemini**: Auto-default `reasoning_effort="high"` if not specified
 5. Build API params with provider-appropriate reasoning configuration
-6. **For Gemini**: Enforce minimum `max_tokens=200`, remove temperature, set `drop_params=False`
+6. **For Gemini**: Enforce minimum `max_tokens=2048`, remove temperature, set `drop_params=False`
 7. **For providers with token budgets**: Automatically increase `max_tokens` to accommodate reasoning + response
 8. Set correct API key environment variable
 9. Call LiteLLM with constructed parameters
