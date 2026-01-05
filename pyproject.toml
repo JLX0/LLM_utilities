@@ -13,6 +13,7 @@ authors = [
 ]
 
 requires-python = ">=3.12"
+# Tested with Python 3.12.11
 dynamic = ["version"]
 
 dependencies = [
@@ -110,6 +111,7 @@ exclude = [
   "docs",
   "docs/visualization_examples",
   "docs/visualization_matplotlib_examples",
+  "tests",
 ]
 
 [tool.ruff.lint]
@@ -132,7 +134,7 @@ line-ending = "auto"
 
 # Configuration for blackdoc
 [tool.blackdoc]
-exclude = "docs"
+exclude = "docs|tests"
 
 # Configuration for MyPy (moved from setup.cfg)
 [tool.mypy]
@@ -148,7 +150,7 @@ strict_equality = true
 extra_checks = true
 no_implicit_reexport = true
 ignore_missing_imports = true
-exclude = ["docs", "tutorial"]
+exclude = ["docs", "tutorial", "tests"]
 
 # Configuration for Pytest
 [tool.pytest.ini_options]
