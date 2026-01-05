@@ -2,10 +2,18 @@
 LiteLLM-based LLM interface for unified API access across multiple providers.
 
 Supported models:
-- claude-sonnet-4.5 (via OpenRouter)
-- gpt-5.2 (via OpenRouter)
-- gemini-pro-3.0 (direct via LiteLLM)
-- deepseek-v3.2 (via OpenRouter, both reasoning and non-reasoning modes)
+- claude-sonnet-4.5 (direct via Anthropic API or via OpenRouter)
+- gpt-5.2 (direct via OpenAI API or via OpenRouter)
+- gemini-pro-3.0 (direct via Google API only - no OpenRouter support)
+- deepseek-v3.2 (direct via DeepSeek API or via OpenRouter, both reasoning and non-reasoning modes)
+
+Routing logic:
+- Gemini: Always uses direct Google API
+- Other models: Prefer OpenRouter if OPENROUTER_API_KEY is set, otherwise use direct API
+
+Dependencies:
+- litellm
+- tenacity (required for reasoning/thinking features)
 """
 
 from __future__ import annotations
@@ -39,37 +47,88 @@ warnings.filterwarnings(
     message=".*is bound to a different event loop.*",
     category=RuntimeWarning,
 )
+# Suppress Pydantic serialization warnings from litellm's response handling
+warnings.filterwarnings(
+    "ignore",
+    message=".*Pydantic serializer warnings.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*PydanticSerializationUnexpectedValue.*",
+    category=UserWarning,
+)
+# Suppress fork deprecation warning in multi-threaded process
+warnings.filterwarnings(
+    "ignore",
+    message=".*use of fork\\(\\) may lead to deadlocks.*",
+    category=DeprecationWarning,
+)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 
-# Supported model aliases and their LiteLLM model identifiers
+# =============================================================================
+# Model Mappings
+# =============================================================================
+
+# Canonical model names (user-facing)
+CANONICAL_MODELS = [
+    "claude-sonnet-4.5",
+    "gpt-5.2",
+    "gemini-pro-3.0",
+    "deepseek-v3.2",
+]
+
+# User-friendly aliases to canonical names
 MODEL_ALIASES: dict[str, str] = {
-    # Claude models (via OpenRouter)
-    "claude-sonnet-4.5": "openrouter/anthropic/claude-sonnet-4.5",
-    "claude-4-5-sonnet": "openrouter/anthropic/claude-sonnet-4.5",
-    "claude-sonnet-4-5": "openrouter/anthropic/claude-sonnet-4.5",
-    # GPT models (via OpenRouter)
-    "gpt-5.2": "openrouter/openai/gpt-5.2",
-    "gpt-5": "openrouter/openai/gpt-5.2",
-    # Gemini models (direct via LiteLLM)
+    # Claude aliases
+    "claude-sonnet-4.5": "claude-sonnet-4.5",
+    "claude-4-5-sonnet": "claude-sonnet-4.5",
+    "claude-sonnet-4-5": "claude-sonnet-4.5",
+    "claude": "claude-sonnet-4.5",
+    # GPT aliases
+    "gpt-5.2": "gpt-5.2",
+    "gpt-5": "gpt-5.2",
+    "gpt": "gpt-5.2",
+    # Gemini aliases
+    "gemini-pro-3.0": "gemini-pro-3.0",
+    "gemini-3-pro": "gemini-pro-3.0",
+    "gemini-pro-3": "gemini-pro-3.0",
+    "gemini": "gemini-pro-3.0",
+    # DeepSeek aliases
+    "deepseek-v3.2": "deepseek-v3.2",
+    "deepseek-3.2": "deepseek-v3.2",
+    "deepseek": "deepseek-v3.2",
+}
+
+# Direct API model mappings (native provider APIs)
+DIRECT_MODEL_MAPPINGS: dict[str, str] = {
+    "claude-sonnet-4.5": "anthropic/claude-sonnet-4-5-20250929",
+    "gpt-5.2": "openai/gpt-5.2",
     "gemini-pro-3.0": "gemini/gemini-3-pro-preview",
-    "gemini-3-pro": "gemini/gemini-3-pro-preview",
-    "gemini-pro-3": "gemini/gemini-3-pro-preview",
-    # DeepSeek v3.2 (via OpenRouter)
+    "deepseek-v3.2": "deepseek/deepseek-chat",  # Non-thinking mode by default
+}
+
+# DeepSeek thinking mode model (direct API)
+DEEPSEEK_REASONING_MODEL = "deepseek/deepseek-reasoner"
+
+# OpenRouter model mappings
+OPENROUTER_MODEL_MAPPINGS: dict[str, str] = {
+    "claude-sonnet-4.5": "openrouter/anthropic/claude-sonnet-4.5",
+    "gpt-5.2": "openrouter/openai/gpt-5.2",
     "deepseek-v3.2": "openrouter/deepseek/deepseek-v3.2",
-    "deepseek-3.2": "openrouter/deepseek/deepseek-v3.2",
-    "deepseek": "openrouter/deepseek/deepseek-v3.2",
+    # Note: Gemini is not available on OpenRouter, always uses direct
 }
 
 # Valid reasoning effort levels
 VALID_EFFORTS = ("low", "medium", "high")
 
-# Reasoning effort to token budget mapping for providers that need it
+# Reasoning effort to token budget mapping for providers that need explicit budgets
 EFFORT_TO_TOKENS: dict[str, dict[str, int]] = {
     "anthropic": {
         "low": 1024,
-        "medium": 8192,
-        "high": 30000,
+        "medium": 2048,
+        "high": 4096,
     },
     "deepseek": {
         "low": 1024,
@@ -78,52 +137,123 @@ EFFORT_TO_TOKENS: dict[str, dict[str, int]] = {
     },
 }
 
+# Environment variable names for API keys
+API_KEY_ENV_VARS: dict[str, str] = {
+    "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
 
-def _setup_openrouter_env() -> None:
-    """Set up OpenRouter environment variables if not already configured."""
-    if "OPENROUTER_API_BASE" not in os.environ:
-        os.environ["OPENROUTER_API_BASE"] = "https://openrouter.ai/api/v1"
-
-    if "OPENROUTER_API_KEY" not in os.environ:
-        warnings.warn(
-            "OPENROUTER_API_KEY environment variable is not set. OpenRouter queries will fail.",
-            UserWarning,
-        )
-
-
-_setup_openrouter_env()
+# Minimum max_tokens for Gemini models to ensure room for both reasoning and response
+GEMINI_MIN_MAX_TOKENS = 200
 
 
-def _resolve_model_name(model: str) -> str:
-    """Resolve a model alias to its full LiteLLM model identifier."""
-    return MODEL_ALIASES.get(model, model)
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
 
-def _is_openrouter_model(model_name: str) -> bool:
-    """Check if model uses OpenRouter."""
-    return (model_name or "").lower().startswith("openrouter/")
+def _check_tenacity_available() -> bool:
+    """Check if tenacity module is available."""
+    try:
+        import tenacity  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
 
 
-def _is_gemini_direct_model(model_name: str) -> bool:
-    """Check if model uses direct Gemini API (not OpenRouter)."""
-    return (model_name or "").lower().startswith("gemini/")
+def _has_openrouter_key() -> bool:
+    """Check if OpenRouter API key is available."""
+    return bool(os.environ.get("OPENROUTER_API_KEY"))
 
 
-def _is_openai_model(model_name: str) -> bool:
-    """Check if model is an OpenAI model (for max_completion_tokens handling)."""
-    lower = model_name.lower()
-    return "gpt-5" in lower or "openai/gpt" in lower
+def _is_gemini_model(canonical_name: str) -> bool:
+    """Check if the canonical model name is a Gemini model."""
+    return canonical_name == "gemini-pro-3.0"
 
 
-def _parse_openrouter_provider(model_name: str) -> str | None:
-    """Parse the OpenRouter provider from: openrouter/<provider>/<model-id>"""
-    name = (model_name or "").strip()
-    if not name.lower().startswith("openrouter/"):
+def _resolve_to_canonical(model: str) -> str:
+    """Resolve a model name or alias to its canonical form."""
+    return MODEL_ALIASES.get(model.lower(), model)
+
+
+def _get_litellm_model_id(
+    canonical_name: str,
+    use_openrouter: bool,
+    reasoning_enabled: bool = False,
+) -> str:
+    """
+    Get the LiteLLM model identifier based on routing preference.
+
+    Args:
+        canonical_name: The canonical model name (e.g., "claude-sonnet-4.5")
+        use_openrouter: Whether to use OpenRouter routing
+        reasoning_enabled: Whether reasoning/thinking mode is enabled (affects DeepSeek)
+
+    Returns:
+        The LiteLLM model identifier string
+    """
+    # Gemini always uses direct API
+    if _is_gemini_model(canonical_name):
+        return DIRECT_MODEL_MAPPINGS[canonical_name]
+
+    # DeepSeek with reasoning enabled uses different model in direct mode
+    if canonical_name == "deepseek-v3.2" and reasoning_enabled and not use_openrouter:
+        return DEEPSEEK_REASONING_MODEL
+
+    # Use OpenRouter or direct based on preference
+    if use_openrouter and canonical_name in OPENROUTER_MODEL_MAPPINGS:
+        return OPENROUTER_MODEL_MAPPINGS[canonical_name]
+
+    return DIRECT_MODEL_MAPPINGS.get(canonical_name, canonical_name)
+
+
+def _get_provider_from_model_id(model_id: str) -> str:
+    """
+    Extract the provider from a LiteLLM model identifier.
+
+    Returns one of: "openrouter", "anthropic", "openai", "gemini", "deepseek", "unknown"
+    """
+    model_lower = model_id.lower()
+
+    if model_lower.startswith("openrouter/"):
+        return "openrouter"
+    elif model_lower.startswith("anthropic/"):
+        return "anthropic"
+    elif model_lower.startswith("openai/"):
+        return "openai"
+    elif model_lower.startswith("gemini/"):
+        return "gemini"
+    elif model_lower.startswith("deepseek/"):
+        return "deepseek"
+    else:
+        # Try to infer from model name
+        if "claude" in model_lower:
+            return "anthropic"
+        elif "gpt" in model_lower:
+            return "openai"
+        elif "gemini" in model_lower:
+            return "gemini"
+        elif "deepseek" in model_lower:
+            return "deepseek"
+        return "unknown"
+
+
+def _get_openrouter_subprovider(model_id: str) -> str | None:
+    """
+    Parse the sub-provider from an OpenRouter model ID.
+
+    Example: "openrouter/anthropic/claude-sonnet-4.5" -> "anthropic"
+    """
+    if not model_id.lower().startswith("openrouter/"):
         return None
-    parts = name.split("/", 2)
-    if len(parts) < 3:
-        return None
-    return parts[1].lower()
+    parts = model_id.split("/", 2)
+    if len(parts) >= 2:
+        return parts[1].lower()
+    return None
 
 
 def _get_token_budget(provider: str, effort: str) -> int | None:
@@ -132,6 +262,92 @@ def _get_token_budget(provider: str, effort: str) -> int | None:
     if provider_map is None:
         return None
     return provider_map.get(effort)
+
+
+def _extract_response_content(response: Any, debug: bool = False) -> str | None:
+    """
+    Extract text content from a LiteLLM response object.
+
+    Handles various response formats from different providers.
+
+    Args:
+        response: The LiteLLM response object
+        debug: Whether to print debug information
+
+    Returns:
+        The extracted text content or None if not found
+    """
+    if response is None:
+        if debug:
+            print("_extract_response_content: response is None")
+        return None
+
+    # Check if response has choices
+    if not hasattr(response, "choices") or not response.choices:
+        if debug:
+            print(
+                f"_extract_response_content: Response has no choices. Response attrs: {dir(response)}"
+            )
+        return None
+
+    choice = response.choices[0]
+
+    # Try to get message content
+    if hasattr(choice, "message") and choice.message is not None:
+        message = choice.message
+
+        # Standard content field
+        if hasattr(message, "content"):
+            content = message.content
+            # Handle case where content is an empty string (valid) vs None (invalid)
+            if content is not None:
+                # Content could be empty string which is technically valid
+                if isinstance(content, str):
+                    return content
+                # Some providers might return content as a list
+                elif isinstance(content, list):
+                    # Try to extract text from content blocks
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and "text" in block:
+                            text_parts.append(block["text"])
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    if text_parts:
+                        return "".join(text_parts)
+                    if debug:
+                        print(
+                            f"_extract_response_content: content is list but no text found: {content}"
+                        )
+            elif debug:
+                print("_extract_response_content: message.content is None")
+
+        # Some providers put content in different fields
+        if hasattr(message, "text") and message.text is not None:
+            return message.text
+
+        # Check for tool calls or function calls that might have content
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            if debug:
+                print("_extract_response_content: Response has tool_calls instead of content")
+            return None
+
+    # Try delta for streaming responses
+    if hasattr(choice, "delta") and choice.delta is not None:
+        delta = choice.delta
+        if hasattr(delta, "content") and delta.content is not None:
+            return delta.content
+
+    # Try text field directly on choice
+    if hasattr(choice, "text") and choice.text is not None:
+        return choice.text
+
+    if debug:
+        print(f"_extract_response_content: Could not extract content. Choice attrs: {dir(choice)}")
+        if hasattr(choice, "message"):
+            print(f"_extract_response_content: Message attrs: {dir(choice.message)}")
+
+    return None
 
 
 def check_and_read_key_file(file_path: str, target_key: str) -> Any:
@@ -202,6 +418,11 @@ def get_api_key(
 def get_supported_models() -> list[str]:
     """Return a list of supported model names/aliases."""
     return list(MODEL_ALIASES.keys())
+
+
+# =============================================================================
+# LLM Base Class
+# =============================================================================
 
 
 class LLMBase:
@@ -423,23 +644,48 @@ class LLMBase:
         return "termination_signal", cost_accumulation
 
 
+# =============================================================================
+# Main LiteLLM Interface
+# =============================================================================
+
+
 class LiteLLM_interface(LLMBase):
     """
     A unified client for interacting with multiple LLM providers via LiteLLM.
 
     Supports:
-    - claude-sonnet-4.5 (via OpenRouter)
-    - gpt-5.2 (via OpenRouter)
-    - gemini-pro-3.0 (direct via LiteLLM)
-    - deepseek-v3.2 (via OpenRouter, with optional reasoning)
+    - claude-sonnet-4.5 (direct via Anthropic API or via OpenRouter)
+    - gpt-5.2 (direct via OpenAI API or via OpenRouter)
+    - gemini-pro-3.0 (direct via Google API only)
+    - deepseek-v3.2 (direct via DeepSeek API or via OpenRouter, with optional reasoning)
+
+    Routing Logic:
+    - Gemini models always use direct Google API (not available on OpenRouter)
+    - For other models: prefer OpenRouter if OPENROUTER_API_KEY is set
+    - Fall back to direct API if OpenRouter key is not available
+
+    Note on Gemini:
+    - Gemini 3 Pro cannot disable thinking/reasoning - it's always active
+    - If reasoning_effort is not specified, it defaults to "high"
+    - LiteLLM maps reasoning_effort to Gemini's thinking_level parameter
 
     Attributes:
-        resolved_model (str): The resolved LiteLLM model identifier.
+        canonical_model (str): The canonical model name (e.g., "claude-sonnet-4.5")
+        resolved_model (str): The resolved LiteLLM model identifier
+        use_openrouter (bool): Whether OpenRouter routing is being used
+        temperature (float): Sampling temperature
 
     Example:
+        >>> # With OpenRouter key set, will use OpenRouter
         >>> llm = LiteLLM_interface(model="claude-sonnet-4.5")
         >>> messages = [{"role": "user", "content": "Hello!"}]
         >>> response, cost = llm.ask(messages)
+
+        >>> # Force direct API by not setting OPENROUTER_API_KEY
+        >>> # or by setting specific provider key
+        >>> import os
+        >>> os.environ["ANTHROPIC_API_KEY"] = "your-key"
+        >>> llm = LiteLLM_interface(model="claude-sonnet-4.5")
     """
 
     def __init__(
@@ -453,21 +699,36 @@ class LiteLLM_interface(LLMBase):
         max_tokens: int = 8192,
         reasoning_effort: str | None = None,
         temperature: float = 0.7,
+        force_direct: bool = False,
     ) -> None:
         """
         Initialize the LiteLLM client.
 
         Args:
-            api_key (Optional[str]): API key (used for setting environment variables if needed).
+            api_key (Optional[str]): API key. If provided, it will be set in the
+                appropriate environment variable based on the model and routing.
             model (str, optional): Model identifier or alias. Defaults to 'claude-sonnet-4.5'.
             timeout (float, optional): Maximum time limit for API calls. Defaults to 120.
             maximum_generation_attempts (int, optional): Max attempts for generation. Defaults to 3.
             maximum_timeout_attempts (int, optional): Max retry attempts. Defaults to 5.
             debug (bool, optional): Enable debug mode for detailed logging. Defaults to False.
             max_tokens (int, optional): Maximum tokens for completion. Defaults to 8192.
-            reasoning_effort (Optional[str], optional): Reasoning effort level. Defaults to None.
+            reasoning_effort (Optional[str], optional): Reasoning effort level
+                ("low", "medium", "high"). For Gemini models, defaults to "high" if not specified.
             temperature (float, optional): Sampling temperature. Defaults to 0.7.
+            force_direct (bool, optional): Force direct API even if OpenRouter key is available.
+                Defaults to False.
         """
+        # Resolve the canonical model name first
+        canonical_model = _resolve_to_canonical(model)
+
+        # For Gemini models, thinking cannot be disabled, so default to "high" if not specified
+        # This ensures sufficient tokens are allocated for both reasoning and response
+        if _is_gemini_model(canonical_model) and reasoning_effort is None:
+            reasoning_effort = "high"
+            if debug:
+                print("Gemini model detected: defaulting reasoning_effort to 'high'")
+
         super().__init__(
             api_key=api_key,
             model=model,
@@ -479,15 +740,52 @@ class LiteLLM_interface(LLMBase):
             reasoning_effort=reasoning_effort,
         )
 
-        self.resolved_model = _resolve_model_name(model)
         self.temperature = temperature
+        self.force_direct = force_direct
+
+        # Store canonical model
+        self.canonical_model = canonical_model
+
+        # Determine routing: OpenRouter vs Direct
+        # Gemini always uses direct; others prefer OpenRouter if key available
+        reasoning_enabled = reasoning_effort is not None and reasoning_effort in VALID_EFFORTS
+
+        if _is_gemini_model(self.canonical_model):
+            self.use_openrouter = False
+        elif force_direct:
+            self.use_openrouter = False
+        else:
+            self.use_openrouter = _has_openrouter_key()
+
+        # Get the resolved LiteLLM model identifier
+        self.resolved_model = _get_litellm_model_id(
+            self.canonical_model,
+            self.use_openrouter,
+            reasoning_enabled,
+        )
 
         # Set API key in environment if provided
         if api_key:
-            if _is_openrouter_model(self.resolved_model):
-                os.environ["OPENROUTER_API_KEY"] = api_key
-            elif _is_gemini_direct_model(self.resolved_model):
+            self._set_api_key(api_key)
+
+        if self.debug:
+            print(f"Model routing: {self.canonical_model} -> {self.resolved_model}")
+            print(f"Using OpenRouter: {self.use_openrouter}")
+
+    def _set_api_key(self, api_key: str) -> None:
+        """Set the API key in the appropriate environment variable."""
+        if self.use_openrouter:
+            os.environ["OPENROUTER_API_KEY"] = api_key
+        else:
+            # Set direct API key based on canonical model
+            if self.canonical_model == "claude-sonnet-4.5":
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+            elif self.canonical_model == "gpt-5.2":
+                os.environ["OPENAI_API_KEY"] = api_key
+            elif self.canonical_model == "gemini-pro-3.0":
                 os.environ["GEMINI_API_KEY"] = api_key
+            elif self.canonical_model == "deepseek-v3.2":
+                os.environ["DEEPSEEK_API_KEY"] = api_key
 
     def _build_api_params(
         self,
@@ -495,6 +793,9 @@ class LiteLLM_interface(LLMBase):
     ) -> dict[str, Any]:
         """
         Build the API parameters for the LiteLLM call.
+
+        Handles provider-specific parameter requirements for both direct and
+        OpenRouter routing.
 
         Args:
             messages (list[dict[str, str]]): The messages to be sent.
@@ -512,9 +813,15 @@ class LiteLLM_interface(LLMBase):
             "drop_params": True,
         }
 
-        # Handle max tokens
+        provider = _get_provider_from_model_id(self.resolved_model)
+
+        # Handle max tokens based on provider
         if self.max_tokens is not None:
-            if _is_openai_model(self.resolved_model):
+            if provider == "openai" or (
+                provider == "openrouter"
+                and _get_openrouter_subprovider(self.resolved_model) == "openai"
+            ):
+                # OpenAI GPT-5.x uses max_completion_tokens
                 api_params["max_completion_tokens"] = self.max_tokens
             else:
                 api_params["max_tokens"] = self.max_tokens
@@ -523,41 +830,94 @@ class LiteLLM_interface(LLMBase):
         if self.temperature is not None:
             api_params["temperature"] = self.temperature
 
-        # Handle reasoning_effort based on model routing
-        is_gemini_direct = _is_gemini_direct_model(self.resolved_model)
-        is_openrouter = _is_openrouter_model(self.resolved_model)
-        or_provider = _parse_openrouter_provider(self.resolved_model) if is_openrouter else None
+        # Handle Gemini-specific requirements
+        # Gemini 3 Pro cannot disable thinking, so we always need reasoning params
+        if provider == "gemini":
+            # Ensure minimum max_tokens for Gemini to have room for both reasoning and response
+            current_max = api_params.get("max_tokens", self.max_tokens)
+            if current_max < GEMINI_MIN_MAX_TOKENS:
+                api_params["max_tokens"] = GEMINI_MIN_MAX_TOKENS
+                if self.debug:
+                    print(
+                        f"Gemini: increased max_tokens from {current_max} to {GEMINI_MIN_MAX_TOKENS}"
+                    )
 
-        if self.reasoning_effort and self.reasoning_effort in VALID_EFFORTS:
-            if is_gemini_direct:
-                # Gemini direct: pass reasoning_effort as parameter
-                api_params["reasoning_effort"] = self.reasoning_effort
-                # Gemini reasoning doesn't support temperature
-                api_params.pop("temperature", None)
-                api_params["drop_params"] = False
+            # Always set reasoning_effort for Gemini (it's already defaulted to "high" in __init__)
+            effort = self.reasoning_effort if self.reasoning_effort else "high"
+            api_params["reasoning_effort"] = effort
+            # Gemini reasoning doesn't support temperature parameter
+            api_params.pop("temperature", None)
+            # Don't drop params for Gemini - reasoning params are essential
+            api_params["drop_params"] = False
 
-            elif is_openrouter:
-                if or_provider == "openai":
-                    # GPT via OpenRouter: pass effort directly
-                    api_params["reasoning"] = {"effort": self.reasoning_effort}
-                    api_params["temperature"] = 1.0  # Required for OpenAI reasoning
-                    api_params["drop_params"] = False
+            if self.debug:
+                print(f"Gemini: set reasoning_effort to '{effort}'")
 
-                elif or_provider == "anthropic":
-                    # Claude via OpenRouter: convert effort to token budget
-                    token_budget = _get_token_budget("anthropic", self.reasoning_effort)
-                    if token_budget:
-                        api_params["reasoning"] = {"max_tokens": token_budget}
-                        api_params["drop_params"] = False
-
-                elif or_provider == "deepseek":
-                    # DeepSeek via OpenRouter: enable reasoning with token budget
-                    token_budget = _get_token_budget("deepseek", self.reasoning_effort)
-                    if token_budget:
-                        api_params["reasoning"] = {"enabled": True, "max_tokens": token_budget}
-                        api_params["drop_params"] = False
+        # Handle reasoning/thinking for non-Gemini providers
+        elif self.reasoning_effort and self.reasoning_effort in VALID_EFFORTS:
+            self._add_reasoning_params(api_params, provider)
 
         return api_params
+
+    def _add_reasoning_params(self, api_params: dict[str, Any], provider: str) -> None:
+        """
+        Add reasoning/thinking parameters based on provider.
+
+        Args:
+            api_params: The API parameters dict to modify
+            provider: The provider identifier
+        """
+        effort = self.reasoning_effort
+
+        if provider == "openrouter":
+            # OpenRouter routing - handle based on sub-provider
+            subprovider = _get_openrouter_subprovider(self.resolved_model)
+
+            if subprovider == "openai":
+                # GPT via OpenRouter: pass effort directly
+                api_params["reasoning"] = {"effort": effort}
+                api_params["temperature"] = 1.0  # Required for OpenAI reasoning
+                api_params["drop_params"] = False
+
+            elif subprovider == "anthropic":
+                # Claude via OpenRouter: use reasoning parameter with max_tokens
+                # OpenRouter doesn't support the 'thinking' parameter directly
+                token_budget = _get_token_budget("anthropic", effort)
+                if token_budget:
+                    api_params["reasoning"] = {"max_tokens": token_budget}
+                    # Increase max_tokens to accommodate reasoning tokens + response
+                    current_max = api_params.get("max_tokens", 8192)
+                    api_params["max_tokens"] = max(current_max, token_budget + 1000)
+                    api_params["drop_params"] = False
+
+            elif subprovider == "deepseek":
+                # DeepSeek via OpenRouter: enable reasoning with token budget
+                token_budget = _get_token_budget("deepseek", effort)
+                if token_budget:
+                    api_params["reasoning"] = {"enabled": True, "max_tokens": token_budget}
+                    api_params["drop_params"] = False
+
+        elif provider == "openai":
+            # Direct OpenAI: pass reasoning_effort directly
+            api_params["reasoning_effort"] = effort
+            api_params["temperature"] = 1.0  # Required for OpenAI reasoning
+            api_params["drop_params"] = False
+
+        elif provider == "anthropic":
+            # Direct Anthropic: use thinking parameter with budget_tokens
+            token_budget = _get_token_budget("anthropic", effort)
+            if token_budget:
+                api_params["thinking"] = {"type": "enabled", "budget_tokens": token_budget}
+                # Increase max_tokens to accommodate thinking tokens + response
+                current_max = api_params.get("max_tokens", 8192)
+                api_params["max_tokens"] = max(current_max, token_budget + 1000)
+                api_params["drop_params"] = False
+
+        elif provider == "deepseek":
+            # Direct DeepSeek: model is already switched to deepseek-reasoner
+            # in _get_litellm_model_id, so no additional params needed
+            # The reasoning is implicit in the model choice
+            pass
 
     def ask_base(
         self,
@@ -580,21 +940,58 @@ class LiteLLM_interface(LLMBase):
 
         api_params = self._build_api_params(messages)
 
+        if self.debug:
+            # Print params without messages for clarity
+            debug_params = {k: v for k, v in api_params.items() if k != "messages"}
+            print(f"API params: {debug_params}")
+
         try:
             response = completion(**api_params)
         except Exception as e:
             if self.debug:
                 print(f"LiteLLM API error: {e}")
+                import traceback
+
+                traceback.print_exc()
             if ret_dict is not None:
                 ret_dict["result"] = (None, 0.0)
             return None, 0.0
 
-        # Extract response text
-        response_text = None
-        if response.choices and response.choices[0].message:
-            response_text = response.choices[0].message.content
+        # Debug: print raw response structure
+        if self.debug:
+            print(f"Raw response object type: {type(response).__name__}")
+            if hasattr(response, "choices"):
+                print(f"Number of choices: {len(response.choices) if response.choices else 0}")
+                if response.choices:
+                    choice = response.choices[0]
+                    print(f"Choice type: {type(choice).__name__}")
+                    if hasattr(choice, "message"):
+                        msg = choice.message
+                        print(f"Message type: {type(msg).__name__ if msg else None}")
+                        if msg:
+                            print(
+                                f"Message content type: {type(msg.content).__name__ if hasattr(msg, 'content') else 'N/A'}"
+                            )
+                            print(
+                                f"Message content value: {repr(msg.content)[:200] if hasattr(msg, 'content') else 'N/A'}"
+                            )
+
+        # Extract response text using the helper function
+        response_text = _extract_response_content(response, debug=self.debug)
 
         if response_text is None:
+            if self.debug:
+                print("Warning: Could not extract response content")
+                # Try to dump more info about the response
+                try:
+                    import json
+
+                    if hasattr(response, "model_dump"):
+                        print(
+                            f"Response dump: {json.dumps(response.model_dump(), indent=2, default=str)[:1000]}"
+                        )
+                except Exception as dump_err:
+                    print(f"Could not dump response: {dump_err}")
             if ret_dict is not None:
                 ret_dict["result"] = (None, 0.0)
             return None, 0.0
@@ -614,7 +1011,11 @@ class LiteLLM_interface(LLMBase):
                 )
 
             # Calculate cost using the Calculator
-            calculator = Calculator(self.model)
+            # Pass routing info for accurate pricing
+            calculator = Calculator(
+                self.canonical_model,
+                use_openrouter=self.use_openrouter,
+            )
             calculator.input_token_length = input_tokens
             calculator.output_token_length = output_tokens
             cost = calculator.calculate_cost_from_tokens()
@@ -632,6 +1033,11 @@ class LiteLLM_interface(LLMBase):
 
 # Backward compatibility alias
 OpenAI_interface = LiteLLM_interface
+
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
 
 
 def extract_code_base(raw_sequence: str, language: str = "python") -> str:

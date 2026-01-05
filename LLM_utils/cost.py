@@ -1,7 +1,7 @@
 """
 Cost calculation utilities for LLM API usage.
 
-Supports:
+Supports both direct API and OpenRouter pricing:
 - claude-sonnet-4.5
 - gpt-5.2
 - gemini-pro-3.0
@@ -19,78 +19,115 @@ class Calculator:
     """
     Calculator for estimating and tracking LLM API costs.
 
-    Supports multiple providers:
+    Supports multiple providers with both direct and OpenRouter pricing:
     - OpenAI (GPT models)
     - Anthropic (Claude models)
     - Google (Gemini models)
     - DeepSeek models
 
     Attributes:
-        model (str): The model identifier.
+        model (str): The canonical model identifier.
+        use_openrouter (bool): Whether OpenRouter routing is being used.
         formatted_input_sequence: The formatted input messages.
         output_sequence_string: The output text string.
         input_token_length (int): Number of input tokens.
         output_token_length (int): Number of output tokens.
     """
 
-    # Pricing per 1M tokens in USD
+    # ==========================================================================
+    # Direct API Pricing (per 1M tokens in USD)
+    # ==========================================================================
 
-    # GPT pricing (via OpenRouter or direct)
-    GPT_input_pricing = {
+    # OpenAI Direct Pricing
+    OPENAI_DIRECT_INPUT_PRICING = {
         "gpt-5.2": 2.50,
         "gpt-5": 2.50,
-        "openrouter/openai/gpt-5.2": 2.50,
     }
 
-    GPT_output_pricing = {
+    OPENAI_DIRECT_OUTPUT_PRICING = {
         "gpt-5.2": 10.00,
         "gpt-5": 10.00,
-        "openrouter/openai/gpt-5.2": 10.00,
     }
 
-    # Anthropic pricing (via OpenRouter or direct)
-    Anthropic_input_pricing = {
+    # Anthropic Direct Pricing
+    ANTHROPIC_DIRECT_INPUT_PRICING = {
         "claude-sonnet-4.5": 3.00,
         "claude-4-5-sonnet": 3.00,
         "claude-sonnet-4-5": 3.00,
-        "openrouter/anthropic/claude-sonnet-4.5": 3.00,
     }
 
-    Anthropic_output_pricing = {
+    ANTHROPIC_DIRECT_OUTPUT_PRICING = {
         "claude-sonnet-4.5": 15.00,
         "claude-4-5-sonnet": 15.00,
         "claude-sonnet-4-5": 15.00,
-        "openrouter/anthropic/claude-sonnet-4.5": 15.00,
     }
 
-    # Gemini pricing (direct via LiteLLM)
-    Gemini_input_pricing = {
+    # Gemini Direct Pricing (always direct, no OpenRouter)
+    GEMINI_DIRECT_INPUT_PRICING = {
         "gemini-pro-3.0": 1.25,
         "gemini-3-pro": 1.25,
         "gemini-pro-3": 1.25,
-        "gemini/gemini-3-pro-preview": 1.25,
     }
 
-    Gemini_output_pricing = {
+    GEMINI_DIRECT_OUTPUT_PRICING = {
         "gemini-pro-3.0": 5.00,
         "gemini-3-pro": 5.00,
         "gemini-pro-3": 5.00,
-        "gemini/gemini-3-pro-preview": 5.00,
     }
 
-    # DeepSeek v3.2 pricing (via OpenRouter)
-    DeepSeek_input_pricing = {
+    # DeepSeek Direct Pricing
+    DEEPSEEK_DIRECT_INPUT_PRICING = {
+        "deepseek-v3.2": 0.27,
+        "deepseek-3.2": 0.27,
+        "deepseek": 0.27,
+    }
+
+    DEEPSEEK_DIRECT_OUTPUT_PRICING = {
+        "deepseek-v3.2": 1.10,
+        "deepseek-3.2": 1.10,
+        "deepseek": 1.10,
+    }
+
+    # ==========================================================================
+    # OpenRouter Pricing (per 1M tokens in USD)
+    # OpenRouter typically adds a small markup over direct pricing
+    # ==========================================================================
+
+    # GPT via OpenRouter
+    OPENROUTER_GPT_INPUT_PRICING = {
+        "gpt-5.2": 2.75,
+        "gpt-5": 2.75,
+    }
+
+    OPENROUTER_GPT_OUTPUT_PRICING = {
+        "gpt-5.2": 11.00,
+        "gpt-5": 11.00,
+    }
+
+    # Anthropic via OpenRouter
+    OPENROUTER_ANTHROPIC_INPUT_PRICING = {
+        "claude-sonnet-4.5": 3.30,
+        "claude-4-5-sonnet": 3.30,
+        "claude-sonnet-4-5": 3.30,
+    }
+
+    OPENROUTER_ANTHROPIC_OUTPUT_PRICING = {
+        "claude-sonnet-4.5": 16.50,
+        "claude-4-5-sonnet": 16.50,
+        "claude-sonnet-4-5": 16.50,
+    }
+
+    # DeepSeek via OpenRouter
+    OPENROUTER_DEEPSEEK_INPUT_PRICING = {
         "deepseek-v3.2": 0.55,
         "deepseek-3.2": 0.55,
         "deepseek": 0.55,
-        "openrouter/deepseek/deepseek-v3.2": 0.55,
     }
 
-    DeepSeek_output_pricing = {
+    OPENROUTER_DEEPSEEK_OUTPUT_PRICING = {
         "deepseek-v3.2": 2.19,
         "deepseek-3.2": 2.19,
         "deepseek": 2.19,
-        "openrouter/deepseek/deepseek-v3.2": 2.19,
     }
 
     def __init__(
@@ -98,18 +135,21 @@ class Calculator:
         model: str,
         formatted_input_sequence: list[dict[str, str]] | None = None,
         output_sequence_string: str | None = None,
+        use_openrouter: bool = False,
     ):
         """
         Initialize the Calculator.
 
         Args:
-            model (str): The model identifier.
+            model (str): The canonical model identifier.
             formatted_input_sequence: Optional formatted input messages.
             output_sequence_string: Optional output text string.
+            use_openrouter (bool): Whether OpenRouter routing is being used.
         """
         self.model = model
         self.formatted_input_sequence = formatted_input_sequence
         self.output_sequence_string = output_sequence_string
+        self.use_openrouter = use_openrouter
         self.input_token_length = 0
         self.output_token_length = 0
 
@@ -130,53 +170,69 @@ class Calculator:
 
     def _get_input_price(self) -> float:
         """Get the input price per 1M tokens for the model."""
-        # Check all pricing dictionaries
-        if self.model in self.GPT_input_pricing:
-            return self.GPT_input_pricing[self.model]
-        elif self.model in self.Anthropic_input_pricing:
-            return self.Anthropic_input_pricing[self.model]
-        elif self.model in self.Gemini_input_pricing:
-            return self.Gemini_input_pricing[self.model]
-        elif self.model in self.DeepSeek_input_pricing:
-            return self.DeepSeek_input_pricing[self.model]
-
-        # Fallback based on provider
         provider = self._get_provider()
-        if provider == "openai":
-            return 2.50
-        elif provider == "anthropic":
-            return 3.00
-        elif provider == "gemini":
-            return 1.25
-        elif provider == "deepseek":
-            return 0.55
+
+        if self.use_openrouter:
+            # OpenRouter pricing
+            if provider == "openai" and self.model in self.OPENROUTER_GPT_INPUT_PRICING:
+                return self.OPENROUTER_GPT_INPUT_PRICING[self.model]
+            elif provider == "anthropic" and self.model in self.OPENROUTER_ANTHROPIC_INPUT_PRICING:
+                return self.OPENROUTER_ANTHROPIC_INPUT_PRICING[self.model]
+            elif provider == "deepseek" and self.model in self.OPENROUTER_DEEPSEEK_INPUT_PRICING:
+                return self.OPENROUTER_DEEPSEEK_INPUT_PRICING[self.model]
         else:
-            return 3.00  # Default fallback
+            # Direct API pricing
+            if provider == "openai" and self.model in self.OPENAI_DIRECT_INPUT_PRICING:
+                return self.OPENAI_DIRECT_INPUT_PRICING[self.model]
+            elif provider == "anthropic" and self.model in self.ANTHROPIC_DIRECT_INPUT_PRICING:
+                return self.ANTHROPIC_DIRECT_INPUT_PRICING[self.model]
+            elif provider == "gemini" and self.model in self.GEMINI_DIRECT_INPUT_PRICING:
+                return self.GEMINI_DIRECT_INPUT_PRICING[self.model]
+            elif provider == "deepseek" and self.model in self.DEEPSEEK_DIRECT_INPUT_PRICING:
+                return self.DEEPSEEK_DIRECT_INPUT_PRICING[self.model]
+
+        # Fallback pricing based on provider
+        fallback_prices = {
+            "openai": 2.50,
+            "anthropic": 3.00,
+            "gemini": 1.25,
+            "deepseek": 0.27,
+        }
+        return fallback_prices.get(provider, 3.00)
 
     def _get_output_price(self) -> float:
         """Get the output price per 1M tokens for the model."""
-        # Check all pricing dictionaries
-        if self.model in self.GPT_output_pricing:
-            return self.GPT_output_pricing[self.model]
-        elif self.model in self.Anthropic_output_pricing:
-            return self.Anthropic_output_pricing[self.model]
-        elif self.model in self.Gemini_output_pricing:
-            return self.Gemini_output_pricing[self.model]
-        elif self.model in self.DeepSeek_output_pricing:
-            return self.DeepSeek_output_pricing[self.model]
-
-        # Fallback based on provider
         provider = self._get_provider()
-        if provider == "openai":
-            return 10.00
-        elif provider == "anthropic":
-            return 15.00
-        elif provider == "gemini":
-            return 5.00
-        elif provider == "deepseek":
-            return 2.19
+
+        if self.use_openrouter:
+            # OpenRouter pricing
+            if provider == "openai" and self.model in self.OPENROUTER_GPT_OUTPUT_PRICING:
+                return self.OPENROUTER_GPT_OUTPUT_PRICING[self.model]
+            elif (
+                provider == "anthropic" and self.model in self.OPENROUTER_ANTHROPIC_OUTPUT_PRICING
+            ):
+                return self.OPENROUTER_ANTHROPIC_OUTPUT_PRICING[self.model]
+            elif provider == "deepseek" and self.model in self.OPENROUTER_DEEPSEEK_OUTPUT_PRICING:
+                return self.OPENROUTER_DEEPSEEK_OUTPUT_PRICING[self.model]
         else:
-            return 15.00  # Default fallback
+            # Direct API pricing
+            if provider == "openai" and self.model in self.OPENAI_DIRECT_OUTPUT_PRICING:
+                return self.OPENAI_DIRECT_OUTPUT_PRICING[self.model]
+            elif provider == "anthropic" and self.model in self.ANTHROPIC_DIRECT_OUTPUT_PRICING:
+                return self.ANTHROPIC_DIRECT_OUTPUT_PRICING[self.model]
+            elif provider == "gemini" and self.model in self.GEMINI_DIRECT_OUTPUT_PRICING:
+                return self.GEMINI_DIRECT_OUTPUT_PRICING[self.model]
+            elif provider == "deepseek" and self.model in self.DEEPSEEK_DIRECT_OUTPUT_PRICING:
+                return self.DEEPSEEK_DIRECT_OUTPUT_PRICING[self.model]
+
+        # Fallback pricing based on provider
+        fallback_prices = {
+            "openai": 10.00,
+            "anthropic": 15.00,
+            "gemini": 5.00,
+            "deepseek": 1.10,
+        }
+        return fallback_prices.get(provider, 15.00)
 
     def calculate_cost_from_tokens(self) -> float:
         """
@@ -381,39 +437,77 @@ class Calculator:
             return input_sequence
 
 
-def get_supported_models_pricing() -> dict[str, dict[str, float]]:
+def get_supported_models_pricing(use_openrouter: bool = False) -> dict[str, dict[str, float]]:
     """
     Get pricing information for all supported models.
+
+    Args:
+        use_openrouter (bool): Whether to return OpenRouter pricing or direct API pricing.
 
     Returns:
         dict: A dictionary with model names as keys and pricing info as values.
     """
     models: dict[str, dict[str, float]] = {}
 
-    # Add all models with their pricing
-    for model in Calculator.GPT_input_pricing:
-        models[model] = {
-            "input_per_1m": Calculator.GPT_input_pricing[model],
-            "output_per_1m": Calculator.GPT_output_pricing.get(model, 10.0),
-        }
+    if use_openrouter:
+        # OpenRouter pricing
+        for model in Calculator.OPENROUTER_GPT_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.OPENROUTER_GPT_INPUT_PRICING[model],
+                "output_per_1m": Calculator.OPENROUTER_GPT_OUTPUT_PRICING.get(model, 11.0),
+                "routing": "openrouter",
+            }
 
-    for model in Calculator.Anthropic_input_pricing:
-        models[model] = {
-            "input_per_1m": Calculator.Anthropic_input_pricing[model],
-            "output_per_1m": Calculator.Anthropic_output_pricing.get(model, 15.0),
-        }
+        for model in Calculator.OPENROUTER_ANTHROPIC_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.OPENROUTER_ANTHROPIC_INPUT_PRICING[model],
+                "output_per_1m": Calculator.OPENROUTER_ANTHROPIC_OUTPUT_PRICING.get(model, 16.5),
+                "routing": "openrouter",
+            }
 
-    for model in Calculator.Gemini_input_pricing:
-        models[model] = {
-            "input_per_1m": Calculator.Gemini_input_pricing[model],
-            "output_per_1m": Calculator.Gemini_output_pricing.get(model, 5.0),
-        }
+        for model in Calculator.OPENROUTER_DEEPSEEK_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.OPENROUTER_DEEPSEEK_INPUT_PRICING[model],
+                "output_per_1m": Calculator.OPENROUTER_DEEPSEEK_OUTPUT_PRICING.get(model, 2.19),
+                "routing": "openrouter",
+            }
 
-    for model in Calculator.DeepSeek_input_pricing:
-        models[model] = {
-            "input_per_1m": Calculator.DeepSeek_input_pricing[model],
-            "output_per_1m": Calculator.DeepSeek_output_pricing.get(model, 2.19),
-        }
+        # Gemini is always direct
+        for model in Calculator.GEMINI_DIRECT_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.GEMINI_DIRECT_INPUT_PRICING[model],
+                "output_per_1m": Calculator.GEMINI_DIRECT_OUTPUT_PRICING.get(model, 5.0),
+                "routing": "direct",
+            }
+    else:
+        # Direct API pricing
+        for model in Calculator.OPENAI_DIRECT_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.OPENAI_DIRECT_INPUT_PRICING[model],
+                "output_per_1m": Calculator.OPENAI_DIRECT_OUTPUT_PRICING.get(model, 10.0),
+                "routing": "direct",
+            }
+
+        for model in Calculator.ANTHROPIC_DIRECT_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.ANTHROPIC_DIRECT_INPUT_PRICING[model],
+                "output_per_1m": Calculator.ANTHROPIC_DIRECT_OUTPUT_PRICING.get(model, 15.0),
+                "routing": "direct",
+            }
+
+        for model in Calculator.GEMINI_DIRECT_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.GEMINI_DIRECT_INPUT_PRICING[model],
+                "output_per_1m": Calculator.GEMINI_DIRECT_OUTPUT_PRICING.get(model, 5.0),
+                "routing": "direct",
+            }
+
+        for model in Calculator.DEEPSEEK_DIRECT_INPUT_PRICING:
+            models[model] = {
+                "input_per_1m": Calculator.DEEPSEEK_DIRECT_INPUT_PRICING[model],
+                "output_per_1m": Calculator.DEEPSEEK_DIRECT_OUTPUT_PRICING.get(model, 1.10),
+                "routing": "direct",
+            }
 
     return models
 
@@ -429,14 +523,37 @@ if __name__ == "__main__":
         "deepseek-v3.2",
     ]
 
+    print("=== Direct API Pricing ===")
     for model in test_models:
-        calc = Calculator(model)
+        calc = Calculator(model, use_openrouter=False)
         calc.input_token_length = 1000
         calc.output_token_length = 500
         cost = calc.calculate_cost_from_tokens()
         print(f"{model}: ${cost:.6f} for 1000 input + 500 output tokens")
 
-    print("\nAll supported models pricing:")
-    pricing = get_supported_models_pricing()
+    print("\n=== OpenRouter Pricing ===")
+    for model in test_models:
+        if model == "gemini-pro-3.0":
+            print(f"{model}: N/A (Gemini always uses direct API)")
+            continue
+        calc = Calculator(model, use_openrouter=True)
+        calc.input_token_length = 1000
+        calc.output_token_length = 500
+        cost = calc.calculate_cost_from_tokens()
+        print(f"{model}: ${cost:.6f} for 1000 input + 500 output tokens")
+
+    print("\n=== All supported models (direct) pricing ===")
+    pricing = get_supported_models_pricing(use_openrouter=False)
     for model, prices in pricing.items():
-        print(f"  {model}: ${prices['input_per_1m']}/1M in, ${prices['output_per_1m']}/1M out")
+        print(
+            f"  {model}: ${prices['input_per_1m']}/1M in, "
+            f"${prices['output_per_1m']}/1M out ({prices['routing']})"
+        )
+
+    print("\n=== All supported models (OpenRouter) pricing ===")
+    pricing = get_supported_models_pricing(use_openrouter=True)
+    for model, prices in pricing.items():
+        print(
+            f"  {model}: ${prices['input_per_1m']}/1M in, "
+            f"${prices['output_per_1m']}/1M out ({prices['routing']})"
+        )
