@@ -6,6 +6,8 @@ Supports both direct API and OpenRouter pricing:
 - gpt-5.2
 - gemini-pro-3.0
 - deepseek-v3.2
+
+Last updated: 2026/01/05
 """
 
 from __future__ import annotations
