@@ -7,7 +7,7 @@ Misc. utilities for interacting with LLMs.
 ## Requirements
 
 - **OS:** Linux-based (tested with Ubuntu 20.04.6 LTS)
-- **uv* (tested with 0.8.8)
+- **uv** (tested with 0.8.8)
 
 ---
 
