@@ -40,12 +40,12 @@ class Calculator:
 
     # OpenAI Direct Pricing
     OPENAI_DIRECT_INPUT_PRICING = {
-        "gpt-5.2": 2.50,
-        "gpt-5": 2.50,
+        "gpt-5.2": 1.75,
+        "gpt-5": 1.25,
     }
 
     OPENAI_DIRECT_OUTPUT_PRICING = {
-        "gpt-5.2": 10.00,
+        "gpt-5.2": 14.00,
         "gpt-5": 10.00,
     }
 
@@ -64,70 +64,70 @@ class Calculator:
 
     # Gemini Direct Pricing (always direct, no OpenRouter)
     GEMINI_DIRECT_INPUT_PRICING = {
-        "gemini-pro-3.0": 1.25,
-        "gemini-3-pro": 1.25,
-        "gemini-pro-3": 1.25,
+        "gemini-pro-3.0": 2.00,
+        "gemini-3-pro": 2.00,
+        "gemini-pro-3": 2.00,
     }
 
     GEMINI_DIRECT_OUTPUT_PRICING = {
-        "gemini-pro-3.0": 5.00,
-        "gemini-3-pro": 5.00,
-        "gemini-pro-3": 5.00,
+        "gemini-pro-3.0": 12.00,
+        "gemini-3-pro": 12.00,
+        "gemini-pro-3": 12.00,
     }
 
     # DeepSeek Direct Pricing
     DEEPSEEK_DIRECT_INPUT_PRICING = {
-        "deepseek-v3.2": 0.27,
-        "deepseek-3.2": 0.27,
-        "deepseek": 0.27,
+        "deepseek-v3.2": 0.28,
+        "deepseek-3.2": 0.28,
+        "deepseek": 0.28,
     }
 
     DEEPSEEK_DIRECT_OUTPUT_PRICING = {
-        "deepseek-v3.2": 1.10,
-        "deepseek-3.2": 1.10,
-        "deepseek": 1.10,
+        "deepseek-v3.2": 0.42,
+        "deepseek-3.2": 0.42,
+        "deepseek": 0.42,
     }
 
     # ==========================================================================
     # OpenRouter Pricing (per 1M tokens in USD)
-    # OpenRouter typically adds a small markup over direct pricing
+    # Note: OpenRouter prices are model-specific and may differ from (or match) direct provider rates.
     # ==========================================================================
 
     # GPT via OpenRouter
     OPENROUTER_GPT_INPUT_PRICING = {
-        "gpt-5.2": 2.75,
-        "gpt-5": 2.75,
+        "gpt-5.2": 1.75,
+        "gpt-5": 1.25,
     }
 
     OPENROUTER_GPT_OUTPUT_PRICING = {
-        "gpt-5.2": 11.00,
-        "gpt-5": 11.00,
+        "gpt-5.2": 14.00,
+        "gpt-5": 10.00,
     }
 
     # Anthropic via OpenRouter
     OPENROUTER_ANTHROPIC_INPUT_PRICING = {
-        "claude-sonnet-4.5": 3.30,
-        "claude-4-5-sonnet": 3.30,
-        "claude-sonnet-4-5": 3.30,
+        "claude-sonnet-4.5": 3.00,
+        "claude-4-5-sonnet": 3.00,
+        "claude-sonnet-4-5": 3.00,
     }
 
     OPENROUTER_ANTHROPIC_OUTPUT_PRICING = {
-        "claude-sonnet-4.5": 16.50,
-        "claude-4-5-sonnet": 16.50,
-        "claude-sonnet-4-5": 16.50,
+        "claude-sonnet-4.5": 15.00,
+        "claude-4-5-sonnet": 15.00,
+        "claude-sonnet-4-5": 15.00,
     }
 
     # DeepSeek via OpenRouter
     OPENROUTER_DEEPSEEK_INPUT_PRICING = {
-        "deepseek-v3.2": 0.55,
-        "deepseek-3.2": 0.55,
-        "deepseek": 0.55,
+        "deepseek-v3.2": 0.25,
+        "deepseek-3.2": 0.25,
+        "deepseek": 0.25,
     }
 
     OPENROUTER_DEEPSEEK_OUTPUT_PRICING = {
-        "deepseek-v3.2": 2.19,
-        "deepseek-3.2": 2.19,
-        "deepseek": 2.19,
+        "deepseek-v3.2": 0.38,
+        "deepseek-3.2": 0.38,
+        "deepseek": 0.38,
     }
 
     def __init__(
